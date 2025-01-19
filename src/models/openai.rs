@@ -120,6 +120,7 @@ impl Model for OpenAIServerModel {
             .map(|tool| get_json_schema(&**tool))
             .collect::<Vec<_>>();
 
+        println!("tools: {}", serde_json::to_string_pretty(&tools).unwrap());
         let mut body = json!({
             "model": self.model_id,
             "messages": messages,

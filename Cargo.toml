@@ -1,5 +1,5 @@
 [package]
-name = "smolagents"
+name = "smolagents-rs"
 version = "0.1.0"
 edition = "2021"
 
@@ -16,6 +16,7 @@ terminal_size = "0.4.1"
 
 [dev-dependencies]
 clap = { version = "4.5.1", features = ["derive"] }
+rustpython-parser = "0.4.0"
 
 [[bin]]
 name = "smolagents-rs"

@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
-use smolagents::agents::{Agent, FunctionCallingAgent};
-use smolagents::models::openai::OpenAIServerModel;
-use smolagents::tools::{DuckDuckGoSearchTool, Tool, VisitWebsiteTool, GoogleSearchTool};
+use smolagents_rs::agents::{Agent, FunctionCallingAgent};
+use smolagents_rs::models::openai::OpenAIServerModel;
+use smolagents_rs::tools::{DuckDuckGoSearchTool, Tool, VisitWebsiteTool, GoogleSearchTool};
 
 #[derive(Debug, Clone, ValueEnum)]
 enum AgentType {
