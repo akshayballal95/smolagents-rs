@@ -54,7 +54,7 @@ pub enum CustomConstant {
     Str(String),
     Bool(bool),
     Tuple(Vec<Constant>),
-    PyObj(PyObject),  // Add this variant
+    PyObj(PyObject),
 }
 
 impl CustomConstant {
@@ -130,6 +130,7 @@ fn setup_static_tools() -> HashMap<String, ToolFunction> {
         ("iter", "iter"),
         ("range", "range"),
         ("reversed", "reversed"),
+        ("print", "print"),
         // Math module functions
         ("ceil", "math.ceil"),
         ("floor", "math.floor"),
@@ -163,8 +164,8 @@ fn setup_static_tools() -> HashMap<String, ToolFunction> {
             for (i, arg) in args.iter().enumerate() {
                 match arg {
                     Constant::Float(f) => locals.set_item(format!("arg{}", i), f)?,
-                    Constant::Int(i) => {
-                        locals.set_item(format!("arg{}", i), convert_bigint_to_f64(i))?
+                    Constant::Int(int) => {
+                        locals.set_item(format!("arg{}", i), convert_bigint_to_i64(int))?;    
                     }
                     Constant::Str(s) => locals.set_item(format!("arg{}", i), s)?,
                     Constant::Tuple(t) => {
@@ -190,10 +191,10 @@ fn setup_static_tools() -> HashMap<String, ToolFunction> {
                 Ok(CustomConstant::Str(string_val))
             } else if let Ok(bool_val) = result.extract::<bool>() {
                 Ok(CustomConstant::Bool(bool_val))
-            } 
-            else {
+            } else if let Ok(int_val) = result.extract::<i64>() {
+                Ok(CustomConstant::Int(BigInt::from(int_val)))
+            } else {
                 Ok(CustomConstant::PyObj(result.into_py(py)))
-                // Err(InterpreterError::RuntimeError("Unsupported return type".to_string()))
             }
         })
     };
@@ -253,7 +254,9 @@ enumerate([1,2,3])
 pow(2,3)
 type(2)
 sqrt(3.4)
-
+a = [2,3]
+for i in range(b, 5):
+    print(i)
     "#;
     let mut state = HashMap::new();
     let ast = ast::Suite::parse(python_source, "<embedded>").unwrap();
@@ -284,10 +287,58 @@ fn evaluate_ast(
                 println!("For: {:?}", for_stmt.iter);
                 let iter = evaluate_expr(&for_stmt.iter.clone(), state, static_tools, custom_tools)?;
                 println!("Iter: {:?}", iter);
-                let iter = iter.tuple().unwrap();
-                for item in iter {
-                    state.insert("i".to_string(), Box::new(CustomConstant::from(item)));
-                    // evaluate_expr(&for_stmt.body.clone(), state, static_tools, custom_tools)?;
+                
+                // Convert PyObj iterator into a vector of values
+                let values = match iter {
+                    CustomConstant::PyObj(obj) => {
+                        Python::with_gil(|py| -> Result<Vec<Constant>, InterpreterError> {
+                            let iter = obj.as_ref(py).iter()?;
+                            let mut values = Vec::new();
+                            
+                            for item in iter {
+                                let item = item?;
+                                if let Ok(num) = item.extract::<i64>() {
+                                    values.push(Constant::Int(BigInt::from(num)));
+                                } else if let Ok(float) = item.extract::<f64>() {
+                                    values.push(Constant::Float(float));
+                                } else if let Ok(string) = item.extract::<String>() {
+                                    values.push(Constant::Str(string));
+                                } else {
+                                    return Err(InterpreterError::RuntimeError(
+                                        "Unsupported type in iterator".to_string(),
+                                    ));
+                                }
+                            }
+                            Ok(values)
+                        })?
+                    }
+                    CustomConstant::Tuple(items) => items,
+                    _ => return Err(InterpreterError::RuntimeError("Expected iterable".to_string())),
+                };
+
+                // Get the target variable name
+                let target_name = match &*for_stmt.target {
+                    ast::Expr::Name(name) => name.id.to_string(),
+                    _ => return Err(InterpreterError::RuntimeError("Expected name as loop target".to_string())),
+                };
+
+                // Iterate over the values and execute the body for each iteration
+                for value in values {
+                    // Update the loop variable in the state
+                    state.insert(target_name.clone(), Box::new(CustomConstant::from(value)));
+                    
+                    // Execute each statement in the loop body
+                    for stmt in &for_stmt.body {
+                        match stmt {
+                            Stmt::Expr(expr) => {
+                                evaluate_expr(&expr.value, state, static_tools, custom_tools)?;
+                            },
+                            // Add other statement types as needed
+                            _ => return Err(InterpreterError::UnsupportedOperation(
+                                "Unsupported statement in for loop".to_string()
+                            )),
+                        }
+                    }
                 }
             }
 
@@ -348,32 +399,14 @@ fn convert_bigint_to_f64(i: &BigInt) -> f64 {
         Sign::NoSign | Sign::Plus => num as f64,
     }
 }
-
-// fn evaluate_numeric_constant(
-//     constant: &Box<ast::Constant>,
-//     state: &mut HashMap<String, Box<dyn Any>>,
-// ) -> Result<f64, InterpreterError> {
-//     match &**constant {
-//         Constant::Int(i) => Ok(convert_bigint_to_f64(&i)),
-//         Constant::Float(f) => Ok(*f),
-//         Constant::Str(s) => {
-//             let value = state
-//                 .get(s)
-//                 .ok_or_else(|| {
-//                     InterpreterError::RuntimeError(format!(
-//                         "Variable '{}' used before assignment",
-//                         s
-//                     ))
-//                 })?
-//                 .downcast_ref::<Constant>()
-//                 .ok_or_else(|| {
-//                     InterpreterError::RuntimeError(format!("Expected numeric value. Got {:?}", s))
-//                 })?;
-//             evaluate_numeric_constant(&Box::new(value.clone()), state)
-//         }
-//         _ => panic!("Expected numeric value"),
-//     }
-// }
+fn convert_bigint_to_i64(i: &BigInt) -> i64 {
+    let i = i.to_u32_digits();
+    let num = i.1.iter().fold(0i64, |acc, &d| acc * (1 << 32) + d as i64);
+    match i.0 {
+        Sign::Minus => -num,
+        Sign::NoSign | Sign::Plus => num,
+    }
+}
 
 fn evaluate_expr(
     expr: &Box<Expr>,
@@ -449,12 +482,19 @@ fn evaluate_expr(
             }
         }
         ast::Expr::BinOp(binop) => {
-            let left_val = evaluate_expr(&binop.left.clone(), state, static_tools, custom_tools)?
-                .float()
-                .unwrap();
-            let right_val = evaluate_expr(&binop.right.clone(), state, static_tools, custom_tools)?
-                .float()
-                .unwrap();
+            let left_val = evaluate_expr(&binop.left.clone(), state, static_tools, custom_tools)?;
+            let left_val = match left_val {
+                CustomConstant::Float(f) => f,
+                CustomConstant::Int(i) => convert_bigint_to_f64(&i),
+                _ => panic!("Expected float or int"),
+            };
+            let right_val = evaluate_expr(&binop.right.clone(), state, static_tools, custom_tools)?;
+            let right_val = match right_val {
+                CustomConstant::Float(f) => f,
+                CustomConstant::Int(i) => convert_bigint_to_f64(&i),
+                _ => panic!("Expected float or int"),
+            };
+            
             match &binop.op {
                 Operator::Add => {
                     println!("{} + {} = {}", left_val, right_val, left_val + right_val);
@@ -570,7 +610,7 @@ fn evaluate_expr(
             }
         }
         ast::Expr::Constant(constant) => match &constant.value {
-            Constant::Int(i) => Ok(CustomConstant::Float(convert_bigint_to_f64(&i))),
+            Constant::Int(i) => Ok(CustomConstant::Int(i.clone())),
             _ => Ok(constant.value.clone().into()),
         },
         ast::Expr::List(list) => Ok(CustomConstant::Tuple(
