@@ -47,7 +47,67 @@ impl From<PyErr> for InterpreterError {
     }
 }
 
-type ToolFunction = Box<dyn Fn(Vec<Constant>) -> Result<Constant, InterpreterError>>;
+#[derive(Clone, Debug)]
+pub enum CustomConstant {
+    Int(BigInt),
+    Float(f64),
+    Str(String),
+    Bool(bool),
+    Tuple(Vec<Constant>),
+    PyObj(PyObject),  // Add this variant
+}
+
+impl CustomConstant {
+    pub fn float(&self) -> Option<f64> {
+        match self {
+            CustomConstant::Float(f) => Some(*f),
+            _ => None,
+        }
+    }
+    pub fn str(&self) -> Option<String> {
+        match self {
+            CustomConstant::Str(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+    pub fn tuple(&self) -> Option<Vec<Constant>> {
+        match self {
+            CustomConstant::Tuple(t) => Some(t.clone()),
+            _ => None,
+        }
+    }
+}
+
+impl From<CustomConstant> for Constant {
+    fn from(custom: CustomConstant) -> Self {
+        match custom {
+            CustomConstant::Int(i) => Constant::Int(i),
+            CustomConstant::Float(f) => Constant::Float(f),
+            CustomConstant::Str(s) => Constant::Str(s),
+            CustomConstant::Bool(b) => Constant::Bool(b),
+            CustomConstant::Tuple(t) => Constant::Tuple(t),
+            CustomConstant::PyObj(_) => {
+                panic!("PyObj is not supported in Constant");
+            }
+        }
+    }
+}
+
+impl From<Constant> for CustomConstant {
+    fn from(constant: Constant) -> Self {
+        match constant {
+            Constant::Int(i) => CustomConstant::Int(i),
+            Constant::Float(f) => CustomConstant::Float(f),
+            Constant::Str(s) => CustomConstant::Str(s),
+            Constant::Bool(b) => CustomConstant::Bool(b),
+            Constant::Tuple(t) => CustomConstant::Tuple(t),
+            _ => panic!("Unsupported constant type"),
+        }
+    }
+}
+
+type ToolFunction = Box<dyn Fn(Vec<Constant>) -> Result<CustomConstant, InterpreterError>>;
+
 
 fn setup_static_tools() -> HashMap<String, ToolFunction> {
     let mut tools = HashMap::new();
@@ -65,6 +125,11 @@ fn setup_static_tools() -> HashMap<String, ToolFunction> {
         ("len", "len"),
         ("ord", "ord"),
         ("chr", "chr"),
+        ("enumerate", "enumerate"),
+        ("type", "type"),
+        ("iter", "iter"),
+        ("range", "range"),
+        ("reversed", "reversed"),
         // Math module functions
         ("ceil", "math.ceil"),
         ("floor", "math.floor"),
@@ -80,6 +145,7 @@ fn setup_static_tools() -> HashMap<String, ToolFunction> {
         ("atan2", "math.atan2"),
         ("degrees", "math.degrees"),
         ("radians", "math.radians"),
+        ("pow", "math.pow"),
     ]
     .iter()
     .cloned()
@@ -116,16 +182,18 @@ fn setup_static_tools() -> HashMap<String, ToolFunction> {
             println!("Evaluating: {}", expr);
 
             let result = py.eval(&expr, None, Some(locals))?;
-            
+            println!("Result: {:?}", result);
             // Handle different return types
             if let Ok(float_val) = result.extract::<f64>() {
-                Ok(Constant::Float(float_val))
+                Ok(CustomConstant::Float(float_val))
             } else if let Ok(string_val) = result.extract::<String>() {
-                Ok(Constant::Str(string_val))
+                Ok(CustomConstant::Str(string_val))
             } else if let Ok(bool_val) = result.extract::<bool>() {
-                Ok(Constant::Bool(bool_val))
-            } else {
-                Err(InterpreterError::RuntimeError("Unsupported return type".to_string()))
+                Ok(CustomConstant::Bool(bool_val))
+            } 
+            else {
+                Ok(CustomConstant::PyObj(result.into_py(py)))
+                // Err(InterpreterError::RuntimeError("Unsupported return type".to_string()))
             }
         })
     };
@@ -154,12 +222,12 @@ fn setup_custom_tools(tools: Vec<Box<dyn Tool>>) -> HashMap<String, ToolFunction
                     match tool.forward(&query) {
                         Ok(results) => {
                             let json = serde_json::to_string_pretty(&results).unwrap_or_default();
-                            Ok(Constant::Str(json))
+                            Ok(CustomConstant::Str(json))
                         }
-                        Err(e) => Ok(Constant::Str(format!("Error: {}", e))),
+                        Err(e) => Ok(CustomConstant::Str(format!("Error: {}", e))),
                     }
                 } else {
-                    Ok(Constant::Str("Error: Invalid arguments".to_string()))
+                    Ok(CustomConstant::Str("Error: Invalid arguments".to_string()))
                 }
             }) as ToolFunction,
         );
@@ -177,15 +245,15 @@ fn main() {
     // p = is_odd(1)
     // "#;
     let python_source = r#"
-a,b = 2 + 3, 4
+a,b = 2.2 + 3, 4
 c= 3.14
 sum([a+1,b])
-abs(-1)
-round(c)
-ord("a")
-ceil(c)
-radians(90) + ceil(c)
 len([1,2,3])
+enumerate([1,2,3])
+pow(2,3)
+type(2)
+sqrt(3.4)
+
     "#;
     let mut state = HashMap::new();
     let ast = ast::Suite::parse(python_source, "<embedded>").unwrap();
@@ -200,7 +268,7 @@ fn evaluate_ast(
     state: &mut HashMap<String, Box<dyn Any>>,
     static_tools: &HashMap<
         String,
-        Box<dyn Fn(Vec<Constant>) -> Result<Constant, InterpreterError>>,
+        Box<dyn Fn(Vec<Constant>) -> Result<CustomConstant, InterpreterError>>,
     >,
     custom_tools: &HashMap<String, ToolFunction>,
 ) -> Result<(), InterpreterError> {
@@ -212,6 +280,16 @@ fn evaluate_ast(
             Stmt::Expr(expr) => {
                 evaluate_expr(&expr.value, state, static_tools, custom_tools)?;
             }
+            Stmt::For(for_stmt) => {
+                println!("For: {:?}", for_stmt.iter);
+                let iter = evaluate_expr(&for_stmt.iter.clone(), state, static_tools, custom_tools)?;
+                println!("Iter: {:?}", iter);
+                let iter = iter.tuple().unwrap();
+                for item in iter {
+                    state.insert("i".to_string(), Box::new(CustomConstant::from(item)));
+                    // evaluate_expr(&for_stmt.body.clone(), state, static_tools, custom_tools)?;
+                }
+            }
 
             Stmt::Assign(assign) => {
                 for target in assign.targets.iter() {
@@ -220,7 +298,7 @@ fn evaluate_ast(
                         ast::Expr::Name(name) => {
                             let value =
                                 evaluate_expr(&assign.value, state, static_tools, custom_tools)?;
-                            state.insert(name.id.to_string(), Box::new(value));
+                            state.insert(name.id.to_string(), Box::new(CustomConstant::from(value)));
                         }
                         ast::Expr::Tuple(target_names) => {
                             let value =
@@ -242,7 +320,7 @@ fn evaluate_ast(
                                     ast::Expr::Name(name) => {
                                         state.insert(
                                             name.id.to_string(),
-                                            Box::new(values[i].clone()),
+                                            Box::new(CustomConstant::from(values[i].clone())),
                                         );
                                     }
                                     _ => panic!("Expected string"),
@@ -252,8 +330,8 @@ fn evaluate_ast(
                         _ => panic!("Expected string"),
                     }
                 }
-                println!("State: a{:?}", state["a"].downcast_ref::<Constant>());
-                println!("State: b{:?}", state["b"].downcast_ref::<Constant>());
+                println!("State: a{:?}", state["a"].downcast_ref::<CustomConstant>());
+                println!("State: b{:?}", state["b"].downcast_ref::<CustomConstant>());
             }
 
             _ => {}
@@ -302,10 +380,10 @@ fn evaluate_expr(
     state: &mut HashMap<String, Box<dyn Any>>,
     static_tools: &HashMap<
         String,
-        Box<dyn Fn(Vec<Constant>) -> Result<Constant, InterpreterError>>,
+        Box<dyn Fn(Vec<Constant>) -> Result<CustomConstant, InterpreterError>>,
     >,
     custom_tools: &HashMap<String, ToolFunction>,
-) -> Result<Constant, InterpreterError> {
+) -> Result<CustomConstant, InterpreterError> {
     match &**expr {
         ast::Expr::Call(call) => {
             let func = match &*call.func {
@@ -326,15 +404,15 @@ fn evaluate_expr(
                 .args
                 .iter()
                 .map(|e| evaluate_expr(&Box::new(e.clone()), state, static_tools, custom_tools))
-                .collect::<Result<Vec<Constant>, InterpreterError>>()?;
+                .collect::<Result<Vec<CustomConstant>, InterpreterError>>()?;
             println!("Function: {:?}", func);
             println!("Args: {:?}", args);
             if static_tools.contains_key(&func) {
                 println!("Static tool");
-                let result = static_tools[&func](args);
+                let result = static_tools[&func](args.iter().map(|c| Constant::from(c.clone())).collect());
                 match result.as_ref() {
                     Ok(result) => match result {
-                        Constant::Str(s) => {
+                        CustomConstant::Str(s) => {
                             println!("Result: {}", s);
                         }
                         _ => {
@@ -348,10 +426,10 @@ fn evaluate_expr(
                 result
             } else if custom_tools.contains_key(&func) {
                 println!("Custom tool");
-                let result = custom_tools[&func](args);
+                let result = custom_tools[&func](args.iter().map(|c| Constant::from(c.clone())).collect());
                 match result.as_ref() {
                     Ok(result) => match result {
-                        Constant::Str(s) => {
+                        CustomConstant::Str(s) => {
                             println!("Result: {}", s);
                         }
                         _ => {
@@ -380,27 +458,27 @@ fn evaluate_expr(
             match &binop.op {
                 Operator::Add => {
                     println!("{} + {} = {}", left_val, right_val, left_val + right_val);
-                    Ok(Constant::Float(left_val + right_val))
+                    Ok(CustomConstant::Float(left_val + right_val))
                 }
                 Operator::Sub => {
                     println!("{} - {} = {}", left_val, right_val, left_val - right_val);
-                    Ok(Constant::Float(left_val - right_val))
+                    Ok(CustomConstant::Float(left_val - right_val))
                 }
                 Operator::Mult => {
                     println!("{} * {} = {}", left_val, right_val, left_val * right_val);
-                    Ok(Constant::Float(left_val * right_val))
+                    Ok(CustomConstant::Float(left_val * right_val))
                 }
                 Operator::Div => {
                     println!("{} / {} = {}", left_val, right_val, left_val / right_val);
-                    Ok(Constant::Float(left_val / right_val))
+                    Ok(CustomConstant::Float(left_val / right_val))
                 }
                 Operator::FloorDiv => {
                     println!("{} // {} = {}", left_val, right_val, left_val / right_val);
-                    Ok(Constant::Float(left_val / right_val))
+                    Ok(CustomConstant::Float(left_val / right_val))
                 }
                 Operator::Mod => {
                     println!("{} % {} = {}", left_val, right_val, left_val % right_val);
-                    Ok(Constant::Float(left_val % right_val))
+                    Ok(CustomConstant::Float(left_val % right_val))
                 }
                 Operator::Pow => {
                     println!(
@@ -409,7 +487,7 @@ fn evaluate_expr(
                         right_val,
                         left_val.powf(right_val)
                     );
-                    Ok(Constant::Float(left_val.powf(right_val)))
+                    Ok(CustomConstant::Float(left_val.powf(right_val)))
                 }
                 Operator::BitOr => {
                     println!("{}", 1 | 0);
@@ -420,7 +498,7 @@ fn evaluate_expr(
                         right_val,
                         left_val as i64 | right_val as i64
                     );
-                    Ok(Constant::Int(BigInt::from(
+                    Ok(CustomConstant::Int(BigInt::from(
                         left_val as i64 | right_val as i64,
                     )))
                 }
@@ -431,7 +509,7 @@ fn evaluate_expr(
                         right_val,
                         left_val as i64 ^ right_val as i64
                     );
-                    Ok(Constant::Int(BigInt::from(
+                    Ok(CustomConstant::Int(BigInt::from(
                         left_val as i64 ^ right_val as i64,
                     )))
                 }
@@ -442,7 +520,7 @@ fn evaluate_expr(
                         right_val,
                         left_val as i64 & right_val as i64
                     );
-                    Ok(Constant::Int(BigInt::from(
+                    Ok(CustomConstant::Int(BigInt::from(
                         left_val as i64 & right_val as i64,
                     )))
                 }
@@ -450,17 +528,17 @@ fn evaluate_expr(
                     let left_val = left_val as i64;
                     let right_val = right_val as i64;
                     println!("{} << {} = {}", left_val, right_val, left_val << right_val);
-                    Ok(Constant::Int(BigInt::from(left_val << right_val)))
+                    Ok(CustomConstant::Int(BigInt::from(left_val << right_val)))
                 }
                 Operator::RShift => {
                     let left_val = left_val as i64;
                     let right_val = right_val as i64;
                     println!("{} >> {} = {}", left_val, right_val, left_val >> right_val);
-                    Ok(Constant::Int(BigInt::from(left_val >> right_val)))
+                    Ok(CustomConstant::Int(BigInt::from(left_val >> right_val)))
                 }
                 Operator::MatMult => {
                     println!("{} * {} = {}", left_val, right_val, left_val * right_val);
-                    Ok(Constant::Float(left_val * right_val))
+                    Ok(CustomConstant::Float(left_val * right_val))
                 }
             }
         }
@@ -468,23 +546,23 @@ fn evaluate_expr(
             let operand = evaluate_expr(&unaryop.operand, state, static_tools, custom_tools)?;
             match &unaryop.op {
                 UnaryOp::USub => {
-                    if let Constant::Float(f) = operand {
-                        Ok(Constant::Float(-f))
+                    if let CustomConstant::Float(f) = operand {
+                        Ok(CustomConstant::Float(-f))
                     } else {
                         panic!("Expected float")
                     }
                 }
                 UnaryOp::UAdd => Ok(operand),
                 UnaryOp::Not => {
-                    if let Constant::Bool(b) = operand {
-                        Ok(Constant::Bool(!b))
+                    if let CustomConstant::Bool(b) = operand {
+                        Ok(CustomConstant::Bool(!b))
                     } else {
                         panic!("Expected boolean")
                     }
                 }
                 UnaryOp::Invert => {
-                    if let Constant::Float(f) = operand {
-                        Ok(Constant::Float(-(f as i64) as f64))
+                    if let CustomConstant::Float(f) = operand {
+                        Ok(CustomConstant::Float(-(f as i64) as f64))
                     } else {
                         panic!("Expected float")
                     }
@@ -492,19 +570,19 @@ fn evaluate_expr(
             }
         }
         ast::Expr::Constant(constant) => match &constant.value {
-            Constant::Int(i) => Ok(Constant::Float(convert_bigint_to_f64(&i))),
-            _ => Ok(constant.value.clone()),
+            Constant::Int(i) => Ok(CustomConstant::Float(convert_bigint_to_f64(&i))),
+            _ => Ok(constant.value.clone().into()),
         },
-        ast::Expr::List(list) => Ok(Constant::Tuple(
+        ast::Expr::List(list) => Ok(CustomConstant::Tuple(
             list.elts
                 .iter()
-                .map(|e| evaluate_expr(&Box::new(e.clone()), state, static_tools, custom_tools))
-                .collect::<Result<Vec<Constant>, InterpreterError>>()?,
+                .map(|e| Constant::from(evaluate_expr(&Box::new(e.clone()), state, static_tools, custom_tools).unwrap()))
+                .collect::<Vec<Constant>>(),
         )),
         ast::Expr::Name(name) => {
             if state.contains_key(&name.id.to_string()) {
                 Ok(state[&name.id.to_string()]
-                    .downcast_ref::<Constant>()
+                    .downcast_ref::<CustomConstant>()
                     .unwrap()
                     .clone())
             } else {
@@ -514,12 +592,12 @@ fn evaluate_expr(
                 )))
             }
         }
-        ast::Expr::Tuple(tuple) => Ok(Constant::Tuple(
+        ast::Expr::Tuple(tuple) => Ok(CustomConstant::Tuple(
             tuple
                 .elts
                 .iter()
-                .map(|e| evaluate_expr(&Box::new(e.clone()), state, static_tools, custom_tools))
-                .collect::<Result<Vec<Constant>, InterpreterError>>()?,
+                .map(|e| Constant::from(evaluate_expr(&Box::new(e.clone()), state, static_tools, custom_tools).unwrap()))
+                .collect::<Vec<Constant>>(),
         )),
         _ => {
             panic!("Unsupported expression: {:?}", expr);
