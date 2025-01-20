@@ -1,5 +1,5 @@
-use std::{any::Any, collections::HashMap, fmt};
-
+use pyo3::types::{PyDict, PyModule};
+use pyo3::{prelude::*, prepare_freethreaded_python};
 use rustpython_parser::{
     ast::{
         self,
@@ -8,6 +8,9 @@ use rustpython_parser::{
     },
     Parse,
 };
+use serde_json;
+use smolagents_rs::tools::{DuckDuckGoSearchTool, Tool};
+use std::{any::Any, collections::HashMap, fmt};
 
 // Custom error type for interpreter
 #[derive(Debug)]
@@ -38,155 +41,136 @@ impl fmt::Display for InterpreterError {
     }
 }
 
+impl From<PyErr> for InterpreterError {
+    fn from(err: PyErr) -> Self {
+        InterpreterError::RuntimeError(err.to_string())
+    }
+}
+
 type ToolFunction = Box<dyn Fn(Vec<Constant>) -> Result<Constant, InterpreterError>>;
 
 fn setup_static_tools() -> HashMap<String, ToolFunction> {
     let mut tools = HashMap::new();
 
-    // Basic type conversions
-    tools.insert(
-        "float".to_string(),
-        Box::new(|args: Vec<Constant>| {
-            if args.len() != 1 {
-                return Err(InterpreterError::RuntimeError(
-                    "float() takes exactly one argument".to_string(),
-                ));
-            }
-            Ok(Constant::Float((&args[0]).clone().float().unwrap_or(0.0)))
-        }) as ToolFunction,
-    );
+    let function_map: HashMap<&str, &str> = [
+        ("float", "float"),
+        ("int", "int"),
+        ("bool", "bool"),
+        ("str", "str"),
+        ("abs", "abs"),
+        ("round", "round"),
+        ("sum", "sum"),
+        ("max", "max"),
+        ("min", "min"),
+        ("len", "len"),
+        ("ord", "ord"),
+        ("chr", "chr"),
+        // Math module functions
+        ("ceil", "math.ceil"),
+        ("floor", "math.floor"),
+        ("sqrt", "math.sqrt"),
+        ("sin", "math.sin"),
+        ("cos", "math.cos"),
+        ("tan", "math.tan"),
+        ("exp", "math.exp"),
+        ("log", "math.log"),
+        ("acos", "math.acos"),
+        ("asin", "math.asin"),
+        ("atan", "math.atan"),
+        ("atan2", "math.atan2"),
+        ("degrees", "math.degrees"),
+        ("radians", "math.radians"),
+    ]
+    .iter()
+    .cloned()
+    .collect();
+    let function_map_clone = function_map.clone();
 
-    tools.insert(
-        "int".to_string(),
-        Box::new(|args: Vec<Constant>| {
-            if args.len() != 1 {
-                return Err(InterpreterError::RuntimeError(
-                    "int() takes exactly one argument".to_string(),
-                ));
-            }
-            Ok(Constant::Int(BigInt::from(
-                (&args[0]).clone().float().unwrap_or(0.0) as i64,
-            )))
-        }) as ToolFunction,
-    );
+    let eval_py = move |func: &str, args: Vec<Constant>| {
+        Python::with_gil(|py| {
+            let locals = PyDict::new(py);
 
-    tools.insert(
-        "bool".to_string(),
-        Box::new(|args: Vec<Constant>| {
-            if args.len() != 1 {
-                return Err(InterpreterError::RuntimeError(
-                    "bool() takes exactly one argument".to_string(),
-                ));
-            }
-            Ok(Constant::Bool(
-                !matches!(&args[0], Constant::Bool(false))
-                    && !matches!(&args[0],
-                        Constant::Int(i) if *i == BigInt::from(0)
-                    ),
-            ))
-        }) as ToolFunction,
-    );
+            // Import required modules
+            let math = PyModule::import(py, "math")?;
+            locals.set_item("math", math)?;
 
-    // Math functions
-    tools.insert(
-        "abs".to_string(),
-        Box::new(|args: Vec<Constant>| {
-            if args.len() != 1 {
-                return Err(InterpreterError::RuntimeError(
-                    "abs() takes exactly one argument".to_string(),
-                ));
+            for (i, arg) in args.iter().enumerate() {
+                match arg {
+                    Constant::Float(f) => locals.set_item(format!("arg{}", i), f)?,
+                    Constant::Int(i) => {
+                        locals.set_item(format!("arg{}", i), convert_bigint_to_f64(i))?
+                    }
+                    Constant::Str(s) => locals.set_item(format!("arg{}", i), s)?,
+                    Constant::Tuple(t) => {
+                        let py_list: Vec<f64> =
+                            t.iter().map(|x| x.clone().float().unwrap_or(0.0)).collect();
+                        locals.set_item(format!("arg{}", i), py_list)?
+                    }
+                    _ => locals.set_item(format!("arg{}", i), 0.0)?,
+                }
             }
-            Ok(Constant::Float(
-                (&args[0]).clone().float().unwrap_or(0.0).abs(),
-            ))
-        }) as ToolFunction,
-    );
 
-    tools.insert(
-        "round".to_string(),
-        Box::new(|args: Vec<Constant>| {
-            if args.len() != 1 && args.len() != 2 {
-                return Err(InterpreterError::RuntimeError(
-                    "round() takes one or two arguments".to_string(),
-                ));
-            }
-            let num = (&args[0]).clone().float().unwrap_or(0.0);
-            let digits = if args.len() == 2 {
-                (&args[1]).clone().float().unwrap_or(0.0) as i32
+            let arg_names: Vec<String> = (0..args.len()).map(|i| format!("arg{}", i)).collect();
+            let func_path = function_map_clone.get(func).unwrap_or(&"builtins.float");
+            let expr = format!("{}({})", func_path, arg_names.join(","));
+            println!("Evaluating: {}", expr);
+
+            let result = py.eval(&expr, None, Some(locals))?;
+            
+            // Handle different return types
+            if let Ok(float_val) = result.extract::<f64>() {
+                Ok(Constant::Float(float_val))
+            } else if let Ok(string_val) = result.extract::<String>() {
+                Ok(Constant::Str(string_val))
+            } else if let Ok(bool_val) = result.extract::<bool>() {
+                Ok(Constant::Bool(bool_val))
             } else {
-                0
-            };
-            let factor = 10.0f64.powi(digits);
-            Ok(Constant::Float((num * factor).round() / factor))
-        }) as ToolFunction,
-    );
-
-    // Aggregation functions
-    tools.insert(
-        "sum".to_string(),
-        Box::new(|args: Vec<Constant>| {
-            Ok(Constant::Float(
-                args.iter().map(|a| a.clone().float().unwrap_or(0.0)).sum(),
-            ))
-        }) as ToolFunction,
-    );
-
-    tools.insert(
-        "max".to_string(),
-        Box::new(|args: Vec<Constant>| {
-            if args.is_empty() {
-                return Err(InterpreterError::RuntimeError(
-                    "max() arg is an empty sequence".to_string(),
-                ));
+                Err(InterpreterError::RuntimeError("Unsupported return type".to_string()))
             }
-            Ok(Constant::Float(
-                args.iter()
-                    .map(|a| a.clone().float().unwrap_or(0.0))
-                    .fold(f64::NEG_INFINITY, f64::max),
-            ))
-        }) as ToolFunction,
-    );
+        })
+    };
 
-    tools.insert(
-        "min".to_string(),
-        Box::new(|args: Vec<Constant>| {
-            if args.is_empty() {
-                return Err(InterpreterError::RuntimeError(
-                    "min() arg is an empty sequence".to_string(),
-                ));
-            }
-            Ok(Constant::Float(
-                args.iter()
-                    .map(|a| a.clone().float().unwrap_or(0.0))
-                    .fold(f64::INFINITY, f64::min),
-            ))
-        }) as ToolFunction,
-    );
-
-    // Length function
-    tools.insert(
-        "len".to_string(),
-        Box::new(|args: Vec<Constant>| {
-            if args.len() != 1 {
-                return Err(InterpreterError::RuntimeError(
-                    "len() takes exactly one argument".to_string(),
-                ));
-            }
-            match &args[0] {
-                Constant::Tuple(t) => Ok(Constant::Int(BigInt::from(t.len()))),
-                _ => Err(InterpreterError::RuntimeError(
-                    "object has no len()".to_string(),
-                )),
-            }
-        }) as ToolFunction,
-    );
+    // Register tools after eval_py is defined
+    for func in function_map.keys() {
+        let func = func.to_string(); // Create owned String
+        let eval_py = eval_py.clone(); // Clone the closure
+        tools.insert(
+            func.clone(),
+            Box::new(move |args| eval_py(&func, args)) as ToolFunction,
+        );
+    }
 
     tools
 }
 
-fn main() {
-    let static_tools = setup_static_tools();
+fn setup_custom_tools(tools: Vec<Box<dyn Tool>>) -> HashMap<String, ToolFunction> {
+    let mut tools_map = HashMap::new();
+    for tool in tools {
+        tools_map.insert(
+            tool.name().to_string(),
+            Box::new(move |args: Vec<Constant>| {
+                if let Some(Constant::Str(query)) = args.first() {
+                    let tool = DuckDuckGoSearchTool::new();
+                    match tool.forward(&query) {
+                        Ok(results) => {
+                            let json = serde_json::to_string_pretty(&results).unwrap_or_default();
+                            Ok(Constant::Str(json))
+                        }
+                        Err(e) => Ok(Constant::Str(format!("Error: {}", e))),
+                    }
+                } else {
+                    Ok(Constant::Str("Error: Invalid arguments".to_string()))
+                }
+            }) as ToolFunction,
+        );
+    }
+    tools_map
+}
 
+fn main() {
+    prepare_freethreaded_python();
+    let static_tools = setup_static_tools();
+    let custom_tools = setup_custom_tools(vec![Box::new(DuckDuckGoSearchTool::new())]);
     // let python_source = r#"
     // def is_odd(i):
     //     return bool(i & 1)
@@ -195,14 +179,18 @@ fn main() {
     let python_source = r#"
 a,b = 2 + 3, 4
 c= 3.14
-sum(a+1,b)
+sum([a+1,b])
 abs(-1)
 round(c)
+ord("a")
+ceil(c)
+radians(90) + ceil(c)
+len([1,2,3])
     "#;
     let mut state = HashMap::new();
     let ast = ast::Suite::parse(python_source, "<embedded>").unwrap();
     println!("{:?}", ast);
-    evaluate_ast(&ast, &mut state, &static_tools).unwrap();
+    evaluate_ast(&ast, &mut state, &static_tools, &custom_tools).unwrap();
 
     // assert!(tokens.all(|t| t.is_ok()));
 }
@@ -214,6 +202,7 @@ fn evaluate_ast(
         String,
         Box<dyn Fn(Vec<Constant>) -> Result<Constant, InterpreterError>>,
     >,
+    custom_tools: &HashMap<String, ToolFunction>,
 ) -> Result<(), InterpreterError> {
     for node in ast.iter() {
         match node {
@@ -221,7 +210,7 @@ fn evaluate_ast(
                 println!("{:?}", func.name);
             }
             Stmt::Expr(expr) => {
-                evaluate_expr(&expr.value, state, static_tools)?;
+                evaluate_expr(&expr.value, state, static_tools, custom_tools)?;
             }
 
             Stmt::Assign(assign) => {
@@ -229,11 +218,13 @@ fn evaluate_ast(
                     // let target = evaluate_expr(&Box::new(target.clone()), state, static_tools)?;
                     match target {
                         ast::Expr::Name(name) => {
-                            let value = evaluate_expr(&assign.value, state, static_tools)?;
+                            let value =
+                                evaluate_expr(&assign.value, state, static_tools, custom_tools)?;
                             state.insert(name.id.to_string(), Box::new(value));
                         }
                         ast::Expr::Tuple(target_names) => {
-                            let value = evaluate_expr(&assign.value, state, static_tools)?;
+                            let value =
+                                evaluate_expr(&assign.value, state, static_tools, custom_tools)?;
                             let values = value.tuple().ok_or_else(|| {
                                 InterpreterError::RuntimeError(format!(
                                     "Tuple unpacking failed. Expected values of type tuple",
@@ -313,13 +304,19 @@ fn evaluate_expr(
         String,
         Box<dyn Fn(Vec<Constant>) -> Result<Constant, InterpreterError>>,
     >,
+    custom_tools: &HashMap<String, ToolFunction>,
 ) -> Result<Constant, InterpreterError> {
     match &**expr {
         ast::Expr::Call(call) => {
             let func = match &*call.func {
                 ast::Expr::Name(name) => name.id.to_string(),
                 ast::Expr::Attribute(attr) => {
-                    let func = evaluate_expr(&Box::new(*attr.value.clone()), state, static_tools)?;
+                    let func = evaluate_expr(
+                        &Box::new(*attr.value.clone()),
+                        state,
+                        static_tools,
+                        custom_tools,
+                    )?;
                     let func = func.str().unwrap();
                     func
                 }
@@ -328,24 +325,56 @@ fn evaluate_expr(
             let args = call
                 .args
                 .iter()
-                .map(|e| evaluate_expr(&Box::new(e.clone()), state, static_tools))
+                .map(|e| evaluate_expr(&Box::new(e.clone()), state, static_tools, custom_tools))
                 .collect::<Result<Vec<Constant>, InterpreterError>>()?;
             println!("Function: {:?}", func);
             println!("Args: {:?}", args);
             if static_tools.contains_key(&func) {
                 println!("Static tool");
                 let result = static_tools[&func](args);
-                println!("Result: {:?}", result);
+                match result.as_ref() {
+                    Ok(result) => match result {
+                        Constant::Str(s) => {
+                            println!("Result: {}", s);
+                        }
+                        _ => {
+                            println!("Result: {:?}", result);
+                        }
+                    },
+                    Err(e) => {
+                        println!("Error: {:?}", e);
+                    }
+                }
+                result
+            } else if custom_tools.contains_key(&func) {
+                println!("Custom tool");
+                let result = custom_tools[&func](args);
+                match result.as_ref() {
+                    Ok(result) => match result {
+                        Constant::Str(s) => {
+                            println!("Result: {}", s);
+                        }
+                        _ => {
+                            println!("Result: {:?}", result);
+                        }
+                    },
+                    Err(e) => {
+                        println!("Error: {:?}", e);
+                    }
+                }
                 result
             } else {
-                Ok(Constant::Int(BigInt::from(1)))
+                Err(InterpreterError::RuntimeError(format!(
+                    "Function '{}' not found",
+                    func
+                )))
             }
         }
         ast::Expr::BinOp(binop) => {
-            let left_val = evaluate_expr(&binop.left.clone(), state, static_tools)?
+            let left_val = evaluate_expr(&binop.left.clone(), state, static_tools, custom_tools)?
                 .float()
                 .unwrap();
-            let right_val = evaluate_expr(&binop.right.clone(), state, static_tools)?
+            let right_val = evaluate_expr(&binop.right.clone(), state, static_tools, custom_tools)?
                 .float()
                 .unwrap();
             match &binop.op {
@@ -436,7 +465,7 @@ fn evaluate_expr(
             }
         }
         ast::Expr::UnaryOp(unaryop) => {
-            let operand = evaluate_expr(&unaryop.operand, state, static_tools)?;
+            let operand = evaluate_expr(&unaryop.operand, state, static_tools, custom_tools)?;
             match &unaryop.op {
                 UnaryOp::USub => {
                     if let Constant::Float(f) = operand {
@@ -469,7 +498,7 @@ fn evaluate_expr(
         ast::Expr::List(list) => Ok(Constant::Tuple(
             list.elts
                 .iter()
-                .map(|e| evaluate_expr(&Box::new(e.clone()), state, static_tools))
+                .map(|e| evaluate_expr(&Box::new(e.clone()), state, static_tools, custom_tools))
                 .collect::<Result<Vec<Constant>, InterpreterError>>()?,
         )),
         ast::Expr::Name(name) => {
@@ -489,7 +518,7 @@ fn evaluate_expr(
             tuple
                 .elts
                 .iter()
-                .map(|e| evaluate_expr(&Box::new(e.clone()), state, static_tools))
+                .map(|e| evaluate_expr(&Box::new(e.clone()), state, static_tools, custom_tools))
                 .collect::<Result<Vec<Constant>, InterpreterError>>()?,
         )),
         _ => {
