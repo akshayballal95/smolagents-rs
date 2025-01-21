@@ -11,7 +11,7 @@ pub trait Model {
     fn run(
         &self,
         input_messages: Vec<Message>,
-        tools: Vec<Box<&dyn Tool>>,
+        tools: &[Box<dyn Tool>],
         max_tokens: Option<usize>,
         args: Option<HashMap<String, Vec<String>>>,
     ) -> Result<impl ModelResponse, AgentError>;

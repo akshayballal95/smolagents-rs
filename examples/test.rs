@@ -9,7 +9,7 @@ use rustpython_parser::{
     Parse,
 };
 use serde_json;
-use smolagents_rs::tools::{DuckDuckGoSearchTool, Tool};
+use smolagents_rs::tools::{DuckDuckGoSearchTool, Tool, VisitWebsiteTool};
 use std::{any::Any, collections::HashMap, fmt};
 
 // Custom error type for interpreter
@@ -67,6 +67,8 @@ impl CustomConstant {
     pub fn str(&self) -> Option<String> {
         match self {
             CustomConstant::Str(s) => Some(s.clone()),
+            CustomConstant::Float(f) => Some(f.to_string()),
+            CustomConstant::Int(i) => Some(i.to_string()),
             _ => None,
         }
     }
@@ -107,7 +109,6 @@ impl From<Constant> for CustomConstant {
 }
 
 type ToolFunction = Box<dyn Fn(Vec<Constant>) -> Result<CustomConstant, InterpreterError>>;
-
 
 fn setup_static_tools() -> HashMap<String, ToolFunction> {
     let mut tools = HashMap::new();
@@ -165,12 +166,18 @@ fn setup_static_tools() -> HashMap<String, ToolFunction> {
                 match arg {
                     Constant::Float(f) => locals.set_item(format!("arg{}", i), f)?,
                     Constant::Int(int) => {
-                        locals.set_item(format!("arg{}", i), convert_bigint_to_i64(int))?;    
+                        locals.set_item(format!("arg{}", i), convert_bigint_to_i64(int))?;
                     }
                     Constant::Str(s) => locals.set_item(format!("arg{}", i), s)?,
                     Constant::Tuple(t) => {
-                        let py_list: Vec<f64> =
-                            t.iter().map(|x| x.clone().float().unwrap_or(0.0)).collect();
+                        let py_list: Vec<f64> = t
+                            .iter()
+                            .map(|x| match x {
+                                Constant::Float(f) => *f,
+                                Constant::Int(i) => convert_bigint_to_f64(i),
+                                _ => 0.0,
+                            })
+                            .collect();
                         locals.set_item(format!("arg{}", i), py_list)?
                     }
                     _ => locals.set_item(format!("arg{}", i), 0.0)?,
@@ -212,25 +219,23 @@ fn setup_static_tools() -> HashMap<String, ToolFunction> {
     tools
 }
 
-fn setup_custom_tools(tools: Vec<Box<dyn Tool>>) -> HashMap<String, ToolFunction> {
+type CustomToolFunction =
+    Box<dyn Fn(Vec<Constant>, HashMap<String, String>) -> Result<CustomConstant, InterpreterError>>;
+fn setup_custom_tools(
+    tools: Vec<Box<dyn Tool>>,
+) -> HashMap<String, CustomToolFunction> {
     let mut tools_map = HashMap::new();
     for tool in tools {
         tools_map.insert(
             tool.name().to_string(),
-            Box::new(move |args: Vec<Constant>| {
-                if let Some(Constant::Str(query)) = args.first() {
-                    let tool = DuckDuckGoSearchTool::new();
-                    match tool.forward(&query) {
-                        Ok(results) => {
-                            let json = serde_json::to_string_pretty(&results).unwrap_or_default();
-                            Ok(CustomConstant::Str(json))
-                        }
-                        Err(e) => Ok(CustomConstant::Str(format!("Error: {}", e))),
-                    }
-                } else {
-                    Ok(CustomConstant::Str("Error: Invalid arguments".to_string()))
-                }
-            }) as ToolFunction,
+            Box::new(
+                move |_args: Vec<Constant>, kwargs: HashMap<String, String>| match tool
+                    .forward(kwargs)
+                {
+                    Ok(results) => Ok(CustomConstant::Str(results)),
+                    Err(e) => Ok(CustomConstant::Str(format!("Error: {}", e))),
+                },
+            ) as CustomToolFunction,
         );
     }
     tools_map
@@ -239,24 +244,17 @@ fn setup_custom_tools(tools: Vec<Box<dyn Tool>>) -> HashMap<String, ToolFunction
 fn main() {
     prepare_freethreaded_python();
     let static_tools = setup_static_tools();
-    let custom_tools = setup_custom_tools(vec![Box::new(DuckDuckGoSearchTool::new())]);
-    // let python_source = r#"
-    // def is_odd(i):
-    //     return bool(i & 1)
-    // p = is_odd(1)
-    // "#;
+    let custom_tools = setup_custom_tools(vec![
+        Box::new(DuckDuckGoSearchTool::new()),
+        Box::new(VisitWebsiteTool::new()),
+    ]);
     let python_source = r#"
 a,b = 2.2 + 3, 4
 c= 3.14
 sum([a+1,b])
 len([1,2,3])
-enumerate([1,2,3])
-pow(2,3)
-type(2)
-sqrt(3.4)
-a = [2,3]
-for i in range(b, 5):
-    print(i)
+output = visit_website(url="https://www.google.com")
+print(output)
     "#;
     let mut state = HashMap::new();
     let ast = ast::Suite::parse(python_source, "<embedded>").unwrap();
@@ -273,28 +271,29 @@ fn evaluate_ast(
         String,
         Box<dyn Fn(Vec<Constant>) -> Result<CustomConstant, InterpreterError>>,
     >,
-    custom_tools: &HashMap<String, ToolFunction>,
+    custom_tools: &HashMap<String, CustomToolFunction>,
 ) -> Result<(), InterpreterError> {
     for node in ast.iter() {
         match node {
             Stmt::FunctionDef(func) => {
-                println!("{:?}", func.name);
+                println!("Function: {:?}", func.name);
             }
             Stmt::Expr(expr) => {
                 evaluate_expr(&expr.value, state, static_tools, custom_tools)?;
             }
             Stmt::For(for_stmt) => {
                 println!("For: {:?}", for_stmt.iter);
-                let iter = evaluate_expr(&for_stmt.iter.clone(), state, static_tools, custom_tools)?;
+                let iter =
+                    evaluate_expr(&for_stmt.iter.clone(), state, static_tools, custom_tools)?;
                 println!("Iter: {:?}", iter);
-                
+
                 // Convert PyObj iterator into a vector of values
                 let values = match iter {
                     CustomConstant::PyObj(obj) => {
                         Python::with_gil(|py| -> Result<Vec<Constant>, InterpreterError> {
                             let iter = obj.as_ref(py).iter()?;
                             let mut values = Vec::new();
-                            
+
                             for item in iter {
                                 let item = item?;
                                 if let Ok(num) = item.extract::<i64>() {
@@ -313,30 +312,40 @@ fn evaluate_ast(
                         })?
                     }
                     CustomConstant::Tuple(items) => items,
-                    _ => return Err(InterpreterError::RuntimeError("Expected iterable".to_string())),
+                    _ => {
+                        return Err(InterpreterError::RuntimeError(
+                            "Expected iterable".to_string(),
+                        ))
+                    }
                 };
 
                 // Get the target variable name
                 let target_name = match &*for_stmt.target {
                     ast::Expr::Name(name) => name.id.to_string(),
-                    _ => return Err(InterpreterError::RuntimeError("Expected name as loop target".to_string())),
+                    _ => {
+                        return Err(InterpreterError::RuntimeError(
+                            "Expected name as loop target".to_string(),
+                        ))
+                    }
                 };
 
                 // Iterate over the values and execute the body for each iteration
                 for value in values {
                     // Update the loop variable in the state
                     state.insert(target_name.clone(), Box::new(CustomConstant::from(value)));
-                    
+
                     // Execute each statement in the loop body
                     for stmt in &for_stmt.body {
                         match stmt {
                             Stmt::Expr(expr) => {
                                 evaluate_expr(&expr.value, state, static_tools, custom_tools)?;
-                            },
+                            }
                             // Add other statement types as needed
-                            _ => return Err(InterpreterError::UnsupportedOperation(
-                                "Unsupported statement in for loop".to_string()
-                            )),
+                            _ => {
+                                return Err(InterpreterError::UnsupportedOperation(
+                                    "Unsupported statement in for loop".to_string(),
+                                ))
+                            }
                         }
                     }
                 }
@@ -349,7 +358,8 @@ fn evaluate_ast(
                         ast::Expr::Name(name) => {
                             let value =
                                 evaluate_expr(&assign.value, state, static_tools, custom_tools)?;
-                            state.insert(name.id.to_string(), Box::new(CustomConstant::from(value)));
+                            state
+                                .insert(name.id.to_string(), Box::new(CustomConstant::from(value)));
                         }
                         ast::Expr::Tuple(target_names) => {
                             let value =
@@ -381,8 +391,6 @@ fn evaluate_ast(
                         _ => panic!("Expected string"),
                     }
                 }
-                println!("State: a{:?}", state["a"].downcast_ref::<CustomConstant>());
-                println!("State: b{:?}", state["b"].downcast_ref::<CustomConstant>());
             }
 
             _ => {}
@@ -415,7 +423,7 @@ fn evaluate_expr(
         String,
         Box<dyn Fn(Vec<Constant>) -> Result<CustomConstant, InterpreterError>>,
     >,
-    custom_tools: &HashMap<String, ToolFunction>,
+    custom_tools: &HashMap<String, CustomToolFunction>,
 ) -> Result<CustomConstant, InterpreterError> {
     match &**expr {
         ast::Expr::Call(call) => {
@@ -433,16 +441,41 @@ fn evaluate_expr(
                 }
                 _ => panic!("Expected function name"),
             };
+
             let args = call
                 .args
                 .iter()
                 .map(|e| evaluate_expr(&Box::new(e.clone()), state, static_tools, custom_tools))
                 .collect::<Result<Vec<CustomConstant>, InterpreterError>>()?;
+
+            let keywords = call
+                .keywords
+                .iter()
+                .map(|k| {
+                    let value = evaluate_expr(
+                        &Box::new(k.value.clone()),
+                        state,
+                        static_tools,
+                        custom_tools,
+                    )?;
+                    Ok((k.arg.as_ref().unwrap().to_string(), value.str().unwrap()))
+                })
+                .collect::<Result<HashMap<String, String>, InterpreterError>>()?;
             println!("Function: {:?}", func);
             println!("Args: {:?}", args);
+            println!("Keywords: {:?}", keywords);
+            if func == "print" {
+                return Ok(CustomConstant::Str(
+                    args.iter()
+                        .map(|c| c.str().unwrap())
+                        .collect::<Vec<String>>()
+                        .join(" "),
+                ));
+            }
             if static_tools.contains_key(&func) {
                 println!("Static tool");
-                let result = static_tools[&func](args.iter().map(|c| Constant::from(c.clone())).collect());
+                let result =
+                    static_tools[&func](args.iter().map(|c| Constant::from(c.clone())).collect());
                 match result.as_ref() {
                     Ok(result) => match result {
                         CustomConstant::Str(s) => {
@@ -459,7 +492,10 @@ fn evaluate_expr(
                 result
             } else if custom_tools.contains_key(&func) {
                 println!("Custom tool");
-                let result = custom_tools[&func](args.iter().map(|c| Constant::from(c.clone())).collect());
+                let result = custom_tools[&func](
+                    args.iter().map(|c| Constant::from(c.clone())).collect(),
+                    keywords,
+                );
                 match result.as_ref() {
                     Ok(result) => match result {
                         CustomConstant::Str(s) => {
@@ -494,7 +530,7 @@ fn evaluate_expr(
                 CustomConstant::Int(i) => convert_bigint_to_f64(&i),
                 _ => panic!("Expected float or int"),
             };
-            
+
             match &binop.op {
                 Operator::Add => {
                     println!("{} + {} = {}", left_val, right_val, left_val + right_val);
@@ -616,7 +652,12 @@ fn evaluate_expr(
         ast::Expr::List(list) => Ok(CustomConstant::Tuple(
             list.elts
                 .iter()
-                .map(|e| Constant::from(evaluate_expr(&Box::new(e.clone()), state, static_tools, custom_tools).unwrap()))
+                .map(|e| {
+                    Constant::from(
+                        evaluate_expr(&Box::new(e.clone()), state, static_tools, custom_tools)
+                            .unwrap(),
+                    )
+                })
                 .collect::<Vec<Constant>>(),
         )),
         ast::Expr::Name(name) => {
@@ -636,7 +677,12 @@ fn evaluate_expr(
             tuple
                 .elts
                 .iter()
-                .map(|e| Constant::from(evaluate_expr(&Box::new(e.clone()), state, static_tools, custom_tools).unwrap()))
+                .map(|e| {
+                    Constant::from(
+                        evaluate_expr(&Box::new(e.clone()), state, static_tools, custom_tools)
+                            .unwrap(),
+                    )
+                })
                 .collect::<Vec<Constant>>(),
         )),
         _ => {

@@ -100,7 +100,7 @@ impl Model for OpenAIServerModel {
     fn run(
         &self,
         messages: Vec<Message>,
-        tools_to_call_from: Vec<Box<&dyn Tool>>,
+        tools_to_call_from: &[Box<dyn Tool>],
         max_tokens: Option<usize>,
         args: Option<HashMap<String, Vec<String>>>,
     ) -> Result<impl ModelResponse, AgentError> {
@@ -116,11 +116,10 @@ impl Model for OpenAIServerModel {
             .collect::<Vec<_>>();
 
         let tools = tools_to_call_from
-            .into_iter()
-            .map(|tool| get_json_schema(&**tool))
+            .iter()
+            .map(|tool| get_json_schema(tool.as_ref()))
             .collect::<Vec<_>>();
 
-        println!("tools: {}", serde_json::to_string_pretty(&tools).unwrap());
         let mut body = json!({
             "model": self.model_id,
             "messages": messages,

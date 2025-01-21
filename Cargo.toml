@@ -13,6 +13,8 @@ log = "0.4"
 colored = "3.0.0"
 scraper = "0.22.0"
 terminal_size = "0.4.1"
+tool_derive = { path = "./tool_derive" }
+meval = "0.2.0"
 
 [dev-dependencies]
 clap = { version = "4.5.1", features = ["derive"] }

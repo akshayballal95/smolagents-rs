@@ -4,16 +4,25 @@ use reqwest::Url;
 use scraper::Selector;
 use serde::Serialize;
 use serde_json::json;
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use tool_derive::{BaseTool, ToolDerive};
+
+// Modify the Tool trait to remove forward
 pub trait Tool: Debug {
     fn name(&self) -> &'static str;
     fn description(&self) -> &'static str;
     fn inputs(&self) -> &HashMap<&'static str, HashMap<&'static str, String>>;
     fn output_type(&self) -> &'static str;
     fn is_initialized(&self) -> bool;
-    fn forward(&self, arguments: HashMap<String, String>) -> Result<Box<dyn Any>>;
+    fn box_clone(&self) -> Box<dyn Tool>;
+    fn forward(&self, arguments: HashMap<String, String>) -> Result<String>;
+}
+
+impl Clone for Box<dyn Tool> {
+    fn clone(&self) -> Self {
+        self.box_clone()
+    }
 }
 
 pub fn get_json_schema(tool: &dyn Tool) -> serde_json::Value {
@@ -47,7 +56,7 @@ pub fn get_json_schema(tool: &dyn Tool) -> serde_json::Value {
     })
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, Default, BaseTool)]
 pub struct BaseTool {
     pub name: &'static str,
     pub description: &'static str,
@@ -56,38 +65,15 @@ pub struct BaseTool {
     pub is_initialized: bool,
 }
 
-impl Tool for BaseTool {
-    fn name(&self) -> &'static str {
-        self.name
-    }
-
-    fn description(&self) -> &'static str {
-        self.description
-    }
-
-    fn inputs(&self) -> &HashMap<&'static str, HashMap<&'static str, String>> {
-        &self.inputs
-    }
-
-    fn output_type(&self) -> &'static str {
-        self.output_type
-    }
-
-    fn is_initialized(&self) -> bool {
-        self.is_initialized
-    }
-    fn forward(&self, _arguments: HashMap<String, String>) -> Result<Box<dyn Any>> {
-        Ok(Box::new("Not implemented"))
+impl BaseTool {
+    fn _forward(&self, _arguments: HashMap<String, String>) -> Result<String> {
+        Err(anyhow::anyhow!("BaseTool does not implement forward"))
     }
 }
-#[derive(Debug, Serialize)]
+
+#[derive(Debug, Serialize, Clone, Default, ToolDerive)]
 pub struct VisitWebsiteTool {
     pub tool: BaseTool,
-}
-impl Default for VisitWebsiteTool {
-    fn default() -> Self {
-        VisitWebsiteTool::new()
-    }
 }
 
 impl VisitWebsiteTool {
@@ -109,7 +95,11 @@ impl VisitWebsiteTool {
         }
     }
 
-    pub fn forward(&self, url: &str) -> String {
+    pub fn forward(&self, arguments: HashMap<String, String>) -> Result<String> {
+        let url = arguments
+            .get("url")
+            .ok_or_else(|| anyhow::anyhow!("URL not provided"))?;
+
         let client = reqwest::blocking::Client::builder()
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
             .build()
@@ -125,61 +115,33 @@ impl VisitWebsiteTool {
                             let converter = HtmlToMarkdown::builder()
                                 .skip_tags(vec!["script", "style"])
                                 .build();
-                            converter.convert(&text).unwrap()
+                            Ok(converter.convert(&text).unwrap())
                         }
-                        Err(_) => "Failed to read response text".to_string(),
+                        Err(_) => Err(anyhow::anyhow!("Failed to read response text")),
                     }
                 } else if resp.status().as_u16() == 999 {
-                    "The website appears to be blocking automated access. Try visiting the URL directly in your browser.".to_string()
+                    Err(anyhow::anyhow!("The website appears to be blocking automated access. Try visiting the URL directly in your browser."))
                 } else {
-                    format!(
+                    Err(anyhow::anyhow!(format!(
                         "Failed to fetch the webpage: HTTP {} - {}",
                         resp.status(),
                         resp.status().canonical_reason().unwrap_or("Unknown Error")
-                    )
+                    )))
                 }
             }
-            Err(e) => format!("Failed to make the request: {}", e),
+            Err(e) => Err(anyhow::anyhow!(format!(
+                "Failed to make the request: {}",
+                e
+            ))),
         }
     }
 }
 
-impl Tool for VisitWebsiteTool {
-    fn name(&self) -> &'static str {
-        self.tool.name()
-    }
-
-    fn description(&self) -> &'static str {
-        self.tool.description()
-    }
-
-    fn inputs(&self) -> &HashMap<&'static str, HashMap<&'static str, String>> {
-        self.tool.inputs()
-    }
-
-    fn output_type(&self) -> &'static str {
-        self.tool.output_type()
-    }
-
-    fn is_initialized(&self) -> bool {
-        self.tool.is_initialized()
-    }
-
-    fn forward(&self, arguments: HashMap<String, String>) -> Result<Box<dyn Any>> {
-        let url = arguments.get("url").unwrap();
-        Ok(Box::new(self.forward(url)))
-    }
-}
-
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, Default, ToolDerive)]
 pub struct FinalAnswerTool {
     pub tool: BaseTool,
 }
-impl Default for FinalAnswerTool {
-    fn default() -> Self {
-        FinalAnswerTool::new()
-    }
-}
+
 impl FinalAnswerTool {
     pub fn new() -> Self {
         FinalAnswerTool {
@@ -199,32 +161,15 @@ impl FinalAnswerTool {
             },
         }
     }
-}
-
-impl Tool for FinalAnswerTool {
-    fn name(&self) -> &'static str {
-        self.tool.name()
-    }
-    fn description(&self) -> &'static str {
-        self.tool.description()
-    }
-    fn inputs(&self) -> &HashMap<&'static str, HashMap<&'static str, String>> {
-        self.tool.inputs()
-    }
-    fn output_type(&self) -> &'static str {
-        self.tool.output_type()
-    }
-    fn is_initialized(&self) -> bool {
-        self.tool.is_initialized()
-    }
-
-    fn forward(&self, arguments: HashMap<String, String>) -> Result<Box<dyn Any>> {
-        let answer = arguments.get("answer").unwrap();
-        Ok(Box::new(answer.to_string()))
+    fn forward(&self, arguments: HashMap<String, String>) -> Result<String> {
+        let answer = arguments
+            .get("answer")
+            .ok_or_else(|| anyhow::anyhow!("Answer not provided"))?;
+        Ok(answer.to_string())
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, ToolDerive)]
 pub struct GoogleSearchTool {
     pub tool: BaseTool,
     pub api_key: String,
@@ -263,7 +208,11 @@ impl GoogleSearchTool {
         }
     }
 
-    fn forward(&self, query: &str, filter_year: Option<&str>) -> String {
+    fn forward(&self, arguments: HashMap<String, String>) -> Result<String> {
+        let query = arguments
+            .get("query")
+            .ok_or_else(|| anyhow::anyhow!("Query not provided"))?;
+        let filter_year = arguments.get("filter_year").map(|s| s.as_str());
         let params = {
             let mut params = HashMap::new();
             params.insert("engine", "google".to_string());
@@ -292,9 +241,9 @@ impl GoogleSearchTool {
                     let results: serde_json::Value = resp.json().unwrap();
                     if results.get("organic_results").is_none() {
                         if filter_year.is_some() {
-                            return format!("'organic_results' key not found for query: '{}' with filtering on year={}. Use a less restrictive query or do not filter on year.", query, filter_year.unwrap());
+                            return Err(anyhow::anyhow!(format!("'organic_results' key not found for query: '{}' with filtering on year={}. Use a less restrictive query or do not filter on year.", query, filter_year.unwrap())));
                         } else {
-                            return format!("'organic_results' key not found for query: '{}'. Use a less restrictive query.", query);
+                            return Err(anyhow::anyhow!(format!("'organic_results' key not found for query: '{}'. Use a less restrictive query.", query)));
                         }
                     }
 
@@ -306,7 +255,7 @@ impl GoogleSearchTool {
                         } else {
                             "".to_string()
                         };
-                        return format!("No results found for '{}'. Try with a more general query, or remove the year filter.", query);
+                        return Err(anyhow::anyhow!(format!("No results found for '{}'. Try with a more general query, or remove the year filter.", query)));
                     }
 
                     let mut web_snippets = Vec::new();
@@ -335,44 +284,20 @@ impl GoogleSearchTool {
                         web_snippets.push(redacted_version);
                     }
 
-                    format!("## Search Results\n{}", web_snippets.join("\n\n"))
+                    Ok(format!("## Search Results\n{}", web_snippets.join("\n\n")))
                 } else {
-                    format!(
+                    Err(anyhow::anyhow!(format!(
                         "Failed to fetch search results: HTTP {}, Error: {}",
                         resp.status(),
                         resp.text().unwrap()
-                    )
+                    )))
                 }
             }
-            Err(e) => format!("Failed to make the request: {}", e),
+            Err(e) => Err(anyhow::anyhow!(format!(
+                "Failed to make the request: {}",
+                e
+            ))),
         }
-    }
-}
-
-impl Tool for GoogleSearchTool {
-    fn name(&self) -> &'static str {
-        self.tool.name()
-    }
-    fn description(&self) -> &'static str {
-        self.tool.description()
-    }
-    fn inputs(&self) -> &HashMap<&'static str, HashMap<&'static str, String>> {
-        self.tool.inputs()
-    }
-    fn output_type(&self) -> &'static str {
-        self.tool.output_type()
-    }
-    fn is_initialized(&self) -> bool {
-        self.tool.is_initialized()
-    }
-
-    fn forward(&self, arguments: HashMap<String, String>) -> Result<Box<dyn Any>> {
-        let query = arguments.get("query").unwrap();
-        let filter_year = match arguments.contains_key("filter_year") {
-            true => Some(arguments.get("filter_year").unwrap().as_str()),
-            false => None,
-        };
-        Ok(Box::new(self.forward(query, filter_year)))
     }
 }
 
@@ -383,7 +308,7 @@ pub struct SearchResult {
     pub url: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, Default, ToolDerive)]
 pub struct DuckDuckGoSearchTool {
     pub tool: BaseTool,
 }
@@ -407,7 +332,10 @@ impl DuckDuckGoSearchTool {
         }
     }
 
-    pub fn forward(&self, query: &str) -> Result<Vec<SearchResult>> {
+    pub fn forward(&self, arguments: HashMap<String, String>) -> Result<String> {
+        let query = arguments
+            .get("query")
+            .ok_or_else(|| anyhow::anyhow!("Query not provided"))?;
         let client = reqwest::blocking::Client::builder()
             .user_agent("Mozilla/5.0 (compatible; MyRustTool/1.0)")
             .build()?;
@@ -458,31 +386,44 @@ impl DuckDuckGoSearchTool {
                 }
             }
         }
-        Ok(results)
+        let json_string = serde_json::to_string_pretty(&results)?;
+        Ok(format!("## Search Results\n{}", json_string))
     }
 }
 
-impl Tool for DuckDuckGoSearchTool {
-    fn name(&self) -> &'static str {
-        self.tool.name()
+#[derive(Debug, Serialize, Clone, Default, ToolDerive)]
+pub struct CalculatorTool {
+    pub tool: BaseTool,
+}
+
+impl CalculatorTool {
+    pub fn new() -> Self {
+        CalculatorTool {
+            tool: BaseTool {
+                name: "calculator",
+                description: r#"Performs a calculation using meval library. 
+                The input is a string representing the expression to calculate. 
+                Only basic operations are supported. Do not use python code in the expression."#,
+                inputs: HashMap::from([(
+                    "expression",
+                    HashMap::from([
+                        ("type", "string".to_string()),
+                        ("description", "The expression to calculate".to_string()),
+                        ("required", "true".to_string()),
+                    ]),
+                )]),
+                output_type: "string",
+                is_initialized: false,
+            },
+        }
     }
-    fn description(&self) -> &'static str {
-        self.tool.description()
-    }
-    fn inputs(&self) -> &HashMap<&'static str, HashMap<&'static str, String>> {
-        self.tool.inputs()
-    }
-    fn output_type(&self) -> &'static str {
-        self.tool.output_type()
-    }
-    fn is_initialized(&self) -> bool {
-        self.tool.is_initialized()
-    }
-    fn forward(&self, arguments: HashMap<String, String>) -> Result<Box<dyn Any>> {
-        let query = arguments.get("query").unwrap();
-        let results = self.forward(query)?;
-        let json_string = serde_json::to_string_pretty(&results)?;
-        Ok(Box::new(json_string))
+
+    pub fn forward(&self, arguments: HashMap<String, String>) -> Result<String> {
+        let expression = arguments
+            .get("expression")
+            .ok_or_else(|| anyhow::anyhow!("Expression not provided"))?;
+        let result = meval::eval_str(expression)?;
+        Ok(result.to_string())
     }
 }
 
@@ -494,7 +435,8 @@ mod tests {
     fn test_visit_website_tool() {
         let tool = VisitWebsiteTool::new();
         let url = "https://www.rust-lang.org/";
-        let _result = tool.forward(&url);
+        let arguments = HashMap::from([("url".to_string(), url.to_string())]);
+        let _result = tool.forward(arguments).unwrap();
     }
 
     #[test]
@@ -502,14 +444,15 @@ mod tests {
         let tool = FinalAnswerTool::new();
         let arguments = HashMap::from([("answer".to_string(), "The answer is 42".to_string())]);
         let result = tool.forward(arguments).unwrap();
-        assert_eq!(result.downcast_ref::<String>().unwrap(), "The answer is 42");
+        assert_eq!(result, "The answer is 42");
     }
 
     #[test]
     fn test_google_search_tool() {
         let tool = GoogleSearchTool::new(None);
         let query = "What is the capital of France?";
-        let result = tool.forward(query, None);
+        let arguments = HashMap::from([("query".to_string(), query.to_string())]);
+        let result = tool.forward(arguments).unwrap();
         assert!(result.contains("Paris"));
     }
 
@@ -517,7 +460,9 @@ mod tests {
     fn test_duckduckgo_search_tool() {
         let tool = DuckDuckGoSearchTool::new();
         let query = "What is the capital of France?";
-        let result = tool.forward(query).unwrap();
-        assert!(result.iter().any(|r| r.snippet.contains("Paris")));
+        let arguments = HashMap::from([("query".to_string(), query.to_string())]);
+        let result = tool.forward(arguments).unwrap();
+        println!("Result: {}", result);
+        assert!(result.contains("Paris"));
     }
 }
