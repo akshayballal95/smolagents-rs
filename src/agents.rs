@@ -48,10 +48,7 @@ pub fn get_tool_descriptions(tools: &[Box<dyn Tool>]) -> Vec<String> {
         .map(|tool| get_tool_description_with_args(tool.to_owned()))
         .collect()
 }
-pub fn format_prompt_with_tools(
-    tools: &[Box<dyn Tool>],
-    prompt_template: &str,
-) -> String {
+pub fn format_prompt_with_tools(tools: &[Box<dyn Tool>], prompt_template: &str) -> String {
     let tool_descriptions = get_tool_descriptions(tools);
     let mut prompt = prompt_template.to_string();
     prompt = prompt.replace("{{tool_descriptions}}", &tool_descriptions.join("\n"));
@@ -442,11 +439,7 @@ impl<M: Model + Debug> MultiStepAgent<M> {
                 content: SYSTEM_PROMPT_PLAN.to_string(),
             };
             let tool_descriptions = get_tool_descriptions(
-                &self
-                    .tools
-                    .values()
-                    .cloned()
-                    .collect::<Vec<Box<dyn Tool>>>(),
+                &self.tools.values().cloned().collect::<Vec<Box<dyn Tool>>>(),
             )
             .join("\n");
             let message_user_prompt_plan = Message {
@@ -597,9 +590,8 @@ impl<M: Model + Debug> Agent for FunctionCallingAgent<M> {
                             "Executing tool call: {} with arguments: {:?}",
                             tool_name, tool_args
                         );
-                        let observation = self
-                            .base_agent
-                            .execute_tool_call(&tool_name, tool_args)?;
+                        let observation =
+                            self.base_agent.execute_tool_call(&tool_name, tool_args)?;
                         step_log.observations = Some(observation.clone());
                         info!("Observation: {}", observation);
                         Ok(None)

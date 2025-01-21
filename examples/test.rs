@@ -221,9 +221,7 @@ fn setup_static_tools() -> HashMap<String, ToolFunction> {
 
 type CustomToolFunction =
     Box<dyn Fn(Vec<Constant>, HashMap<String, String>) -> Result<CustomConstant, InterpreterError>>;
-fn setup_custom_tools(
-    tools: Vec<Box<dyn Tool>>,
-) -> HashMap<String, CustomToolFunction> {
+fn setup_custom_tools(tools: Vec<Box<dyn Tool>>) -> HashMap<String, CustomToolFunction> {
     let mut tools_map = HashMap::new();
     for tool in tools {
         tools_map.insert(
