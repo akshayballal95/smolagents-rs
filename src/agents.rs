@@ -5,14 +5,15 @@ use crate::models::types::MessageRole;
 use crate::prompts::{
     user_prompt_plan, FUNCTION_CALLING_SYSTEM_PROMPT, SYSTEM_PROMPT_FACTS, SYSTEM_PROMPT_PLAN,
 };
-use crate::tools::FinalAnswerTool;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::logger::LOGGER;
 use anyhow::{Error as E, Result};
 use colored::Colorize;
 use log::info;
-use ollama_rs::generation::tools::{Tool, ToolCallFunction, ToolGroup, ToolInfo};
+use ollama_rs::generation::tools::{Tool, ToolCall, ToolCallFunction, ToolGroup, ToolInfo};
 
 const DEFAULT_TOOL_DESCRIPTION_TEMPLATE: &str = r#"
 {{ tool.name }}: {{ tool.description }}
@@ -22,8 +23,70 @@ const DEFAULT_TOOL_DESCRIPTION_TEMPLATE: &str = r#"
 
 use std::fmt::Debug;
 
+pub trait AgentInfo {
+    fn name(&self) -> &'static str;
+    fn description(&self) -> String;
+    fn get_max_steps(&self) -> usize;
+    fn get_step_number(&self) -> usize;
+    fn increment_step_number(&mut self);
+    fn get_logs_mut(&mut self) -> &mut Vec<Step>;
+    fn set_task(&mut self, task: &str);
+    fn get_system_prompt(&self) -> &str;
+}
 
+pub trait Agent: AgentInfo {
+    fn step(&mut self, log_entry: &mut Step) -> impl Future<Output = Result<Option<String>>>;
+    fn direct_run(&mut self, _task: &str) -> impl Future<Output = Result<String>> {
+        async move {
+            let mut final_answer = None;
+            while final_answer.is_none() && self.get_step_number() < self.get_max_steps() {
+                let mut step_log = Step::ActionStep(AgentStep {
+                    agent_memory: None,
+                    llm_output: None,
+                    tool_call: None,
+                    error: None,
+                    observations: None,
+                    _step: self.get_step_number(),
+                });
 
+                let step_result = self.step(&mut step_log).await?;
+                if let Some(answer) = step_result {
+                    final_answer = Some(answer);
+                }
+                self.get_logs_mut().push(step_log);
+                self.increment_step_number();
+            }
+
+            final_answer.ok_or_else(|| anyhow::anyhow!("No answer found"))
+        }
+    }
+    fn stream_run(&mut self, _task: &str) -> impl Future<Output = Result<String>> {
+        async move {
+            self.direct_run(_task).await
+        }
+    }
+    fn run(&mut self, task: &str, stream: bool, reset: bool) -> impl Future<Output = Result<String>> {
+        // self.task = task.to_string();
+        async move {
+        self.set_task(task);
+
+        let system_prompt_step = Step::SystemPromptStep(self.get_system_prompt().to_string());
+        if reset {
+            self.get_logs_mut().clear();
+            self.get_logs_mut().push(system_prompt_step);
+        } else if self.get_logs_mut().is_empty() {
+            self.get_logs_mut().push(system_prompt_step);
+        } else {
+            self.get_logs_mut()[0] = system_prompt_step;
+        }
+        self.get_logs_mut().push(Step::TaskStep(task.to_string()));
+        match stream {
+            true => self.stream_run(task).await,
+            false => self.direct_run(task).await,
+            }
+        }
+    }
+}
 
 pub fn format_prompt_with_tools(tools: Vec<ToolInfo>, prompt_template: &str) -> String {
     let tool_descriptions = serde_json::to_string(&tools).unwrap();
@@ -33,7 +96,7 @@ pub fn format_prompt_with_tools(tools: Vec<ToolInfo>, prompt_template: &str) -> 
     prompt
 }
 
-pub fn show_agents_description(managed_agents: &HashMap<String, Box<dyn Agent>>) -> String {
+pub fn show_agents_description(managed_agents: &HashMap<String, Box<dyn AgentInfo>>) -> String {
     let mut managed_agent_description = r#"You can also give requests to team members.
 Calling a team member works the same as for calling a tool: simply, the only argument you can give in the call is 'request', a long string explaining your request.
 Given that this team member is a real human, you should be very verbose in your request.
@@ -48,7 +111,7 @@ Here is a list of the team members that you can call:"#.to_string();
 
 pub fn format_prompt_with_managed_agent_description(
     prompt_template: String,
-    managed_agents: &HashMap<String, Box<dyn Agent>>,
+    managed_agents: &HashMap<String, Box<dyn AgentInfo>>,
     agent_descriptions_placeholder: Option<&str>,
 ) -> Result<String> {
     let agent_descriptions_placeholder =
@@ -65,66 +128,6 @@ pub fn format_prompt_with_managed_agent_description(
         ))
     } else {
         Ok(prompt_template.replace(agent_descriptions_placeholder, ""))
-    }
-}
-
-pub trait Agent: Debug {
-    fn name(&self) -> &'static str;
-    fn get_max_steps(&self) -> usize;
-    fn get_step_number(&self) -> usize;
-    fn increment_step_number(&mut self);
-    fn get_logs_mut(&mut self) -> &mut Vec<Step>;
-    fn set_task(&mut self, task: &str);
-    fn get_system_prompt(&self) -> &str;
-    fn description(&self) -> String {
-        "".to_string()
-    }
-    fn step(&mut self, log_entry: &mut Step) -> Result<Option<String>>;
-    fn direct_run(&mut self, _task: &str) -> Result<String> {
-        let mut final_answer: Option<String> = None;
-        while final_answer.is_none() && self.get_step_number() < self.get_max_steps() {
-            let mut step_log = Step::ActionStep(AgentStep {
-                agent_memory: None,
-                llm_output: None,
-                tool_call: None,
-                error: None,
-                observations: None,
-                _step: self.get_step_number(),
-            });
-
-            final_answer = self.step(&mut step_log)?;
-            self.get_logs_mut().push(step_log);
-            self.increment_step_number();
-        }
-        info!(
-            "Final answer: {}",
-            final_answer
-                .clone()
-                .unwrap_or("Could not find answer".to_string())
-        );
-        Ok(final_answer.unwrap_or_else(|| "Max steps reached without final answer".to_string()))
-    }
-    fn stream_run(&mut self, _task: &str) -> Result<String> {
-        todo!()
-    }
-    fn run(&mut self, task: &str, stream: bool, reset: bool) -> Result<String> {
-        // self.task = task.to_string();
-        self.set_task(task);
-
-        let system_prompt_step = Step::SystemPromptStep(self.get_system_prompt().to_string());
-        if reset {
-            self.get_logs_mut().clear();
-            self.get_logs_mut().push(system_prompt_step);
-        } else if self.get_logs_mut().is_empty() {
-            self.get_logs_mut().push(system_prompt_step);
-        } else {
-            self.get_logs_mut()[0] = system_prompt_step;
-        }
-        self.get_logs_mut().push(Step::TaskStep(task.to_string()));
-        match stream {
-            true => self.stream_run(task),
-            false => self.direct_run(task),
-        }
     }
 }
 
@@ -147,22 +150,12 @@ pub struct AgentStep {
     _step: usize,
 }
 
-#[derive(Debug, Clone)]
-pub struct ToolCall {
-    name: String,
-    arguments: HashMap<String, String>,
-    id: String,
-}
-
-// Define a trait for the parent functionality
-
-#[derive(Debug)]
 pub struct MultiStepAgent<M: Model, T: ToolGroup> {
     pub model: M,
     pub tools: T,
     pub system_prompt_template: String,
     pub name: &'static str,
-    pub managed_agents: Option<HashMap<String, Box<dyn Agent>>>,
+    pub managed_agents: Option<HashMap<String, Box<dyn AgentInfo>>>,
     pub description: String,
     pub max_steps: usize,
     pub step_number: usize,
@@ -171,9 +164,12 @@ pub struct MultiStepAgent<M: Model, T: ToolGroup> {
     pub logs: Vec<Step>,
 }
 
-impl<M: Model + Debug, T: ToolGroup + Debug> Agent for MultiStepAgent<M, T> {
+impl<M: Model , T: ToolGroup > AgentInfo for MultiStepAgent<M, T> {
     fn name(&self) -> &'static str {
         self.name
+    }
+    fn description(&self) -> String {
+        self.description.clone()
     }
     fn get_max_steps(&self) -> usize {
         self.max_steps
@@ -181,36 +177,47 @@ impl<M: Model + Debug, T: ToolGroup + Debug> Agent for MultiStepAgent<M, T> {
     fn get_step_number(&self) -> usize {
         self.step_number
     }
-    fn set_task(&mut self, task: &str) {
-        self.task = task.to_string();
-    }
-    fn get_system_prompt(&self) -> &str {
-        &self.system_prompt_template
-    }
     fn increment_step_number(&mut self) {
         self.step_number += 1;
     }
     fn get_logs_mut(&mut self) -> &mut Vec<Step> {
         &mut self.logs
     }
-    fn description(&self) -> String {
-        self.description.clone()
+    fn set_task(&mut self, task: &str) {
+        self.task = task.to_string();
     }
+    fn get_system_prompt(&self) -> &str {
+        &self.system_prompt_template
+    }
+}
 
-    /// Perform one step in the ReAct framework: the agent thinks, acts, and observes the result.
-    ///
-    /// Returns None if the step is not final.
-    fn step(&mut self, _: &mut Step) -> Result<Option<String>> {
+impl<M: Model, T: ToolGroup > Agent for MultiStepAgent<M, T> {
+    fn step(&mut self, _: &mut Step) -> impl Future<Output = Result<Option<String>>> {
+        async move {
+            todo!()
+        }
+    }
+    fn direct_run(&mut self, _: &str) -> impl Future<Output = Result<String>> {
+        async move {
+            todo!()
+        }
+    }
+    fn stream_run(&mut self, _: &str) -> impl Future<Output = Result<String>> {
+        async move {
+            todo!()
+        }
+    }
+    fn run(&mut self, _: &str, _: bool, _: bool) -> Pin<Box<dyn Future<Output = Result<String>> + '_>> {
         todo!()
     }
 }
 
-impl<M: Model + Debug, T: ToolGroup + Debug> MultiStepAgent<M, T> {
+impl<M: Model, T: ToolGroup > MultiStepAgent<M, T> {
     pub fn new(
         model: M,
         tools: T,
         system_prompt: Option<&str>,
-        managed_agents: Option<HashMap<String, Box<dyn Agent>>>,
+        managed_agents: Option<HashMap<String, Box<dyn AgentInfo>>>,
         description: Option<&str>,
         max_steps: Option<usize>,
     ) -> Result<Self> {
@@ -311,20 +318,7 @@ impl<M: Model + Debug, T: ToolGroup + Debug> MultiStepAgent<M, T> {
                     if step_log.tool_call.is_some() {
                         let tool_call_message = Message {
                             role: MessageRole::Assistant,
-                            content: format!(
-                                r#"[
-                                \{{
-                                \'id\': \"{}\"
-                                \'type\': \"function\",
-                                \'function\": {{
-                                    \"name\": \"{}\"
-                                    \"arguments\": {:?}
-                            }}
-                                ]"#,
-                                step_log.tool_call.clone().unwrap().id,
-                                step_log.tool_call.clone().unwrap().name,
-                                step_log.tool_call.clone().unwrap().arguments
-                            ),
+                            content: serde_json::to_string(&step_log.tool_call.as_ref().unwrap().function).unwrap(),
                         };
                         memory.push(tool_call_message);
                     }
@@ -348,11 +342,7 @@ impl<M: Model + Debug, T: ToolGroup + Debug> MultiStepAgent<M, T> {
                         let tool_response_message = {
                             Message {
                                 role: MessageRole::User,
-                                content: format!(
-                                    "Call id: {}\n{}",
-                                    step_log.tool_call.as_ref().unwrap().id,
-                                    message_content
-                                ),
+                                content:message_content
                             }
                         };
                         memory.push(tool_response_message);
@@ -364,7 +354,7 @@ impl<M: Model + Debug, T: ToolGroup + Debug> MultiStepAgent<M, T> {
     }
 
 
-    pub fn planning_step(&mut self, task: &str, is_first_step: bool, _step: usize) {
+    pub async fn planning_step(&mut self, task: &str, is_first_step: bool, _step: usize) {
         if is_first_step {
             let message_prompt_facts = Message {
                 role: MessageRole::System,
@@ -390,6 +380,7 @@ impl<M: Model + Debug, T: ToolGroup + Debug> MultiStepAgent<M, T> {
                     None,
                     None,
                 )
+                .await
                 .unwrap()
                 .get_response()
                 .unwrap_or("".to_string());
@@ -422,6 +413,7 @@ impl<M: Model + Debug, T: ToolGroup + Debug> MultiStepAgent<M, T> {
                         vec!["Observation:".to_string()],
                     )])),
                 )
+                .await
                 .unwrap()
                 .get_response()
                 .unwrap();
@@ -440,17 +432,16 @@ impl<M: Model + Debug, T: ToolGroup + Debug> MultiStepAgent<M, T> {
     }
 }
 
-#[derive(Debug)]
 pub struct FunctionCallingAgent<M: Model, T: ToolGroup> {
     base_agent: MultiStepAgent<M, T>,
 }
 
-impl<M: Model + Debug, T: ToolGroup + Debug> FunctionCallingAgent<M, T> {
+impl<M: Model, T: ToolGroup > FunctionCallingAgent<M, T> {
     pub fn new(
         model: M,
         tools: T,
         system_prompt: Option<&str>,
-        managed_agents: Option<HashMap<String, Box<dyn Agent>>>,
+        managed_agents: Option<HashMap<String, Box<dyn AgentInfo>>>,
         description: Option<&str>,
         max_steps: Option<usize>,
     ) -> Result<Self> {
@@ -467,21 +458,21 @@ impl<M: Model + Debug, T: ToolGroup + Debug> FunctionCallingAgent<M, T> {
     }
 }
 
-impl<M: Model + Debug, T: ToolGroup + Debug> Agent for FunctionCallingAgent<M, T> {
+impl<M: Model , T: ToolGroup > AgentInfo for FunctionCallingAgent<M, T> {
     fn name(&self) -> &'static str {
         self.base_agent.name()
     }
-    fn set_task(&mut self, task: &str) {
-        self.base_agent.set_task(task);
+    fn description(&self) -> String {
+        self.base_agent.description()
     }
-    fn get_system_prompt(&self) -> &str {
-        self.base_agent.get_system_prompt()
+    fn get_step_number(&self) -> usize {
+        self.base_agent.get_step_number()
     }
     fn get_max_steps(&self) -> usize {
         self.base_agent.get_max_steps()
     }
-    fn get_step_number(&self) -> usize {
-        self.base_agent.get_step_number()
+    fn get_system_prompt(&self) -> &str {
+        self.base_agent.get_system_prompt()
     }
     fn increment_step_number(&mut self) {
         self.base_agent.increment_step_number();
@@ -489,12 +480,15 @@ impl<M: Model + Debug, T: ToolGroup + Debug> Agent for FunctionCallingAgent<M, T
     fn get_logs_mut(&mut self) -> &mut Vec<Step> {
         self.base_agent.get_logs_mut()
     }
+    fn set_task(&mut self, task: &str) {
+        self.base_agent.set_task(task);
+    }
+}
 
-    /// Perform one step in the ReAct framework: the agent thinks, acts, and observes the result.
-    ///
-    /// Returns None if the step is not final.
-    fn step(&mut self, log_entry: &mut Step) -> Result<Option<String>> {
-        match log_entry {
+impl<M: Model , T: ToolGroup > Agent for FunctionCallingAgent<M, T> {
+    fn step(&mut self, log_entry: &mut Step) -> impl Future<Output = Result<Option<String>>> {
+        async move {
+            match log_entry {
             Step::ActionStep(step_log) => {
                 let agent_memory = self.base_agent.write_inner_memory_from_logs(None);
                 self.base_agent.input_messages = Some(agent_memory.clone());
@@ -514,60 +508,28 @@ impl<M: Model + Debug, T: ToolGroup + Debug> Agent for FunctionCallingAgent<M, T
                             vec!["Observation:".to_string()],
                         )])),
                     )
+                    .await
                     .unwrap();
+                
+                let tool_call = model_message.get_tools_used().unwrap().first().unwrap().clone();
+                
+                step_log.tool_call = Some(tool_call.clone());
 
-                let tool_names = model_message.get_tools_used().unwrap();
-                let tool_name = tool_names.first().unwrap().clone().function.name;
-                let tool_args = model_message
-                    .get_tools_used()
-                    .unwrap()
-                    .first()
-                    .unwrap()
-                    .function
-                    .get_arguments()
-                    .unwrap();
-                let tool_call_id = model_message
-                    .get_tools_used()
-                    .unwrap()
-                    .first()
-                    .unwrap()
-                    .id
-                    .clone();
-                let tool_call = ToolCall {
-                    name: tool_name.clone(),
-                    arguments: tool_args.clone(),
-                };
-                match tool_name.as_str() {
-                    "final_answer" => {
-                        info!("Executing tool call: {}", tool_name);
-                        let answer = self.base_agent.execute_tool_call(&tool_name, tool_args);
-                        Ok(Some(answer.unwrap()))
-                    }
-                    _ => {
-                        step_log.tool_call = Some(ToolCall {
-                            name: tool_name.clone(),
-                            arguments: tool_args.clone(),
-                            id: tool_call_id.clone(),
-                        });
-
-                        info!(
-                            "Executing tool call: {} with arguments: {:?}",
-                            tool_name, tool_args
-                        );
-                        let observation = self
-                            .base_agent
-                            .execute_tool_call(&tool_name, tool_args)
-                            .unwrap();
-                        step_log.observations = Some(observation.clone());
-                        info!("Observation: {}", observation);
-                        Ok(None)
-                    }
-                }
+                info!(
+                    "Executing tool call: {:?}",
+                    tool_call
+                );
+                println!("Tool call: {:?}", tool_call);
+                let observation = self.base_agent.tools.call(&tool_call.function).await.unwrap();
+                step_log.observations = Some(observation.clone());
+                info!("Observation: {}", observation);
+                Ok(None)
             }
-
             _ => {
                 todo!()
             }
         }
+    }
+
     }
 }

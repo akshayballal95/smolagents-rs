@@ -4,8 +4,8 @@ use crate::errors::AgentError;
 use crate::models::model_traits::{Model, ModelResponse};
 use crate::models::types::{Message, MessageRole};
 use anyhow::Result;
-use ollama_rs::generation::tools::{ToolGroup, ToolInfo};
-use reqwest::blocking::Client;
+use ollama_rs::generation::tools::{ToolCall, ToolGroup, ToolInfo};
+use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
 #[derive(Debug, Deserialize)]
@@ -26,13 +26,6 @@ pub struct AssistantMessage {
     pub refusal: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct ToolCall {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub call_type: String,
-    pub function: FunctionCall,
-}
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct FunctionCall {
@@ -97,7 +90,7 @@ impl OpenAIServerModel {
 }
 
 impl Model for OpenAIServerModel {
-    fn run(
+    async fn run(
         &self,
         messages: Vec<Message>,
         tools_to_call_from: Vec<ToolInfo>,
@@ -115,7 +108,19 @@ impl Model for OpenAIServerModel {
             })
             .collect::<Vec<_>>();
 
-        let tools = serde_json::to_string(&tools_to_call_from).unwrap();
+        let mut tools = tools_to_call_from.iter().map(|tool| {
+            json!(tool)
+        }).collect::<Vec<_>>();
+
+        //replace the key "Function" with "function" for each tool
+        tools = tools.iter().map(|tool| {
+            let mut tool_json = tool.clone();
+            tool_json["type"] = "function".into();
+            tool_json
+        }).collect::<Vec<_>>();
+
+
+        println!("Tools: {}", serde_json::to_string_pretty(&tools).unwrap());
 
         let mut body = json!({
             "model": self.model_id,
@@ -139,15 +144,16 @@ impl Model for OpenAIServerModel {
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&body)
             .send()
+            .await
             .map_err(|e| {
                 AgentError::Generation(format!("Failed to get response from OpenAI: {}", e))
             })?;
 
         match response.status() {
-            reqwest::StatusCode::OK => Ok(response.json::<OpenAIResponse>().unwrap()),
+            reqwest::StatusCode::OK => Ok(response.json::<OpenAIResponse>().await.unwrap()),
             _ => Err(AgentError::Generation(format!(
                 "Failed to get response from OpenAI: {}",
-                response.text().unwrap()
+                response.text().await.unwrap()
             ))),
         }
     }

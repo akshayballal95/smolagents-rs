@@ -2,7 +2,7 @@ use ollama_rs::generation::{parameters::JsonSchema, tools::Tool};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, JsonSchema)]
-struct Params {
+pub struct Params {
     #[schemars(
         description = "The final answer to the question"
     )]    answer: String,

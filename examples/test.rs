@@ -1,9 +1,11 @@
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
+use ollama_rs::generation::tools::implementations::{DDGSearcher, Scraper};
+use ollama_rs::generation::tools::Tool;
+use ollama_rs::tool_group;
 use smolagents::agents::{Agent, FunctionCallingAgent};
 use smolagents::models::openai::OpenAIServerModel;
-use smolagents::tools::{DuckDuckGoSearchTool, Tool, VisitWebsiteTool};
-
+use smolagents::tools::final_answer_tool::FinalAnswerTool;
 #[derive(Debug, Clone, ValueEnum)]
 enum AgentType {
     FunctionCalling,
@@ -43,18 +45,13 @@ struct Args {
     stream: bool,
 }
 
-fn create_tool(tool_type: &ToolType) -> Box<dyn Tool> {
-    match tool_type {
-        ToolType::DuckDuckGo => Box::new(DuckDuckGoSearchTool::new()),
-        ToolType::VisitWebsite => Box::new(VisitWebsiteTool::new()),
-    }
-}
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Create tools
-    let tools: Vec<Box<dyn Tool>> = args.tools.iter().map(create_tool).collect();
+    let tools = tool_group!(DDGSearcher::new(), Scraper::new());
 
     // Create model
     let model = OpenAIServerModel::new(args.model.as_deref(), None, args.api_key);
@@ -67,6 +64,6 @@ fn main() -> Result<()> {
     };
 
     // Run the agent
-    let _result = agent.run(&args.task, args.stream, true)?;
+    let _result = agent.run(&args.task, args.stream, true).await?;
     Ok(())
 }

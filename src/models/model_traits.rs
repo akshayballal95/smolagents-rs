@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use ollama_rs::generation::tools::{ToolGroup, ToolInfo};
-use crate::{errors::AgentError, models::openai::ToolCall, models::types::Message};
+use std::{collections::HashMap, future::Future};
+use ollama_rs::generation::tools::{ToolGroup, ToolInfo, ToolCall};
+use crate::{errors::AgentError,     models::types::Message};
 use anyhow::Result;
 pub trait ModelResponse {
     fn get_response(&self) -> Result<String>;
@@ -14,5 +14,5 @@ pub trait Model {
         tools: Vec<ToolInfo>,
         max_tokens: Option<usize>,
         args: Option<HashMap<String, Vec<String>>>,
-    ) -> Result<impl ModelResponse, AgentError>;
+    ) -> impl Future<Output = Result<impl ModelResponse, AgentError>>;
 }
