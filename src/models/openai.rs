@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use crate::errors::AgentError;
 use crate::models::model_traits::{Model, ModelResponse};
 use crate::models::types::{Message, MessageRole};
-use crate::tools::{get_json_schema, Tool};
 use anyhow::Result;
+use ollama_rs::generation::tools::{ToolGroup, ToolInfo};
 use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde_json::json;
@@ -100,7 +100,7 @@ impl Model for OpenAIServerModel {
     fn run(
         &self,
         messages: Vec<Message>,
-        tools_to_call_from: Vec<Box<&dyn Tool>>,
+        tools_to_call_from: Vec<ToolInfo>,
         max_tokens: Option<usize>,
         args: Option<HashMap<String, Vec<String>>>,
     ) -> Result<impl ModelResponse, AgentError> {
@@ -115,10 +115,7 @@ impl Model for OpenAIServerModel {
             })
             .collect::<Vec<_>>();
 
-        let tools = tools_to_call_from
-            .into_iter()
-            .map(|tool| get_json_schema(&**tool))
-            .collect::<Vec<_>>();
+        let tools = serde_json::to_string(&tools_to_call_from).unwrap();
 
         let mut body = json!({
             "model": self.model_id,

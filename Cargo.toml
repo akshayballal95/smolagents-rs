@@ -13,7 +13,8 @@ log = "0.4"
 colored = "3.0.0"
 scraper = "0.22.0"
 terminal_size = "0.4.1"
-
+ollama-rs = {version = "0.2.4", optional = true, features = ["tool-implementations", "macros"]}
+schemars = "0.8.21"
 [dev-dependencies]
 clap = { version = "4.5.1", features = ["derive"] }
 
@@ -23,7 +24,9 @@ path = "src/bin/main.rs"
 required-features = ["cli-deps"]
 
 [features]
+default = ["ollama"]
 cli-deps = ["dep:clap"]
+ollama = ["dep:ollama-rs"]
 
 [dependencies.clap]
 version = "4.5.1"
