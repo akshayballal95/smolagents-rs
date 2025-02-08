@@ -1,25 +1,16 @@
 use crate::errors::AgentError;
-use crate::models::model_traits::{Model, ModelResponse};
+use crate::logger::LOGGER;
+use crate::models::model_traits::Model;
 use crate::prompts::{
     user_prompt_plan, FUNCTION_CALLING_SYSTEM_PROMPT, SYSTEM_PROMPT_FACTS, SYSTEM_PROMPT_PLAN,
 };
-use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
-
-use crate::logger::LOGGER;
 use anyhow::{Error as E, Result};
 use colored::Colorize;
 use log::info;
 use ollama_rs::generation::chat::{ChatMessage, MessageRole};
-use ollama_rs::generation::tools::{Tool, ToolCall, ToolCallFunction, ToolGroup, ToolInfo};
-use ollama_rs::tool_group;
-
-const DEFAULT_TOOL_DESCRIPTION_TEMPLATE: &str = r#"
-{{ tool.name }}: {{ tool.description }}
-    Takes inputs: {{tool.inputs}}
-    Returns an output of type: {{tool.output_type}}
-"#;
+use ollama_rs::generation::tools::{ToolCall, ToolGroup, ToolInfo};
+use std::collections::HashMap;
+use std::future::Future;
 
 use std::fmt::Debug;
 
@@ -201,21 +192,16 @@ impl<M: Model, T: ToolGroup> AgentInfo for MultiStepAgent<M, T> {
 }
 
 impl<M: Model, T: ToolGroup> Agent for MultiStepAgent<M, T> {
-    fn step(&mut self, _: &mut Step) -> impl Future<Output = Result<Option<String>>> {
-        async move { todo!() }
+    async fn step(&mut self, _: &mut Step) -> Result<Option<String>> {
+        todo!()
     }
-    fn direct_run(&mut self, _: &str) -> impl Future<Output = Result<String>> {
-        async move { todo!() }
+    async fn direct_run(&mut self, _: &str) -> Result<String> {
+        todo!()
     }
-    fn stream_run(&mut self, _: &str) -> impl Future<Output = Result<String>> {
-        async move { todo!() }
+    async fn stream_run(&mut self, _: &str) -> Result<String> {
+        todo!()
     }
-    fn run(
-        &mut self,
-        _: &str,
-        _: bool,
-        _: bool,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + '_>> {
+    async fn run(&mut self, _: &str, _: bool, _: bool) -> Result<String> {
         todo!()
     }
 }
@@ -520,69 +506,65 @@ impl<M: Model, T: ToolGroup> AgentInfo for FunctionCallingAgent<M, T> {
 }
 
 impl<M: Model, T: ToolGroup> Agent for FunctionCallingAgent<M, T> {
-    fn step(&mut self, log_entry: &mut Step) -> impl Future<Output = Result<Option<String>>> {
-        async move {
-            match log_entry {
-                Step::ActionStep(step_log) => {
-                    let agent_memory = self.base_agent.write_inner_memory_from_logs(None);
-                    self.base_agent.input_messages = Some(agent_memory.clone());
-                    step_log.agent_memory = Some(agent_memory.clone());
-                    let mut tools = vec![];
-                    T::tool_info(&mut tools);
+    async fn step(&mut self, log_entry: &mut Step) -> Result<Option<String>> {
+        match log_entry {
+            Step::ActionStep(step_log) => {
+                let agent_memory = self.base_agent.write_inner_memory_from_logs(None);
+                self.base_agent.input_messages = Some(agent_memory.clone());
+                step_log.agent_memory = Some(agent_memory.clone());
+                let mut tools = vec![];
+                T::tool_info(&mut tools);
 
-                    let model_message = self
-                        .base_agent
-                        .model
-                        .run(
-                            self.base_agent.input_messages.as_ref().unwrap().clone(),
-                            tools,
-                            None,
-                            Some(HashMap::from([(
-                                "stop".to_string(),
-                                vec!["Observation:".to_string()],
-                            )])),
-                        )
-                        .await
-                        .unwrap();
+                let model_message = self
+                    .base_agent
+                    .model
+                    .run(
+                        self.base_agent.input_messages.as_ref().unwrap().clone(),
+                        tools,
+                        None,
+                        Some(HashMap::from([(
+                            "stop".to_string(),
+                            vec!["Observation:".to_string()],
+                        )])),
+                    )
+                    .await
+                    .unwrap();
 
-                    let tool_call = model_message.get_tools_used();
+                let tool_call = model_message.get_tools_used();
 
-                    if let Ok(tool_call) = tool_call {
-                        match tool_call.first().unwrap().function.name.as_str() {
-                            "final_answer" => {
-                                info!("Final answer tool call: {:?}", tool_call);
-                                let answer = self
-                                    .base_agent
-                                    .tools
-                                    .call(&tool_call.first().unwrap().function)
-                                    .await
-                                    .unwrap();
-                                return Ok(Some(answer));
-                            }
-                            _ => {
-                                let tool_call = tool_call.first().unwrap().clone();
-                                step_log.tool_call = Some(tool_call.clone());
-
-                                info!("Executing tool call: {:?}", tool_call);
-                                let observation =
-                                    match self.base_agent.tools.call(&tool_call.function).await {
-                                        Ok(observation) => observation,
-                                        Err(e) => {
-                                            e.to_string()
-                                        }
-                                    };
-                                step_log.observations = Some(observation.clone());
-                                info!("Observation: {}", observation);
-                                return Ok(None);
-                            }
+                if let Ok(tool_call) = tool_call {
+                    match tool_call.first().unwrap().function.name.as_str() {
+                        "final_answer" => {
+                            info!("Final answer tool call: {:?}", tool_call);
+                            let answer = self
+                                .base_agent
+                                .tools
+                                .call(&tool_call.first().unwrap().function)
+                                .await
+                                .unwrap();
+                            Ok(Some(answer))
                         }
-                    } else {
-                        return Ok(Some(model_message.get_response().unwrap()));
+                        _ => {
+                            let tool_call = tool_call.first().unwrap().clone();
+                            step_log.tool_call = Some(tool_call.clone());
+
+                            info!("Executing tool call: {:?}", tool_call);
+                            let observation =
+                                match self.base_agent.tools.call(&tool_call.function).await {
+                                    Ok(observation) => observation,
+                                    Err(e) => e.to_string(),
+                                };
+                            step_log.observations = Some(observation.clone());
+                            info!("Observation: {}", observation);
+                            Ok(None)
+                        }
                     }
+                } else {
+                    Ok(Some(model_message.get_response().unwrap()))
                 }
-                _ => {
-                    todo!()
-                }
+            }
+            _ => {
+                todo!()
             }
         }
     }

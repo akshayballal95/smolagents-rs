@@ -1,6 +1,6 @@
-use std::{collections::HashMap, future::Future, sync::Arc};
-use ollama_rs::generation::{chat::ChatMessage, tools::{ToolCall, ToolGroup, ToolInfo}};
-use crate::{errors::AgentError};
+use std::{collections::HashMap, future::Future};
+use ollama_rs::generation::{chat::ChatMessage, tools::{ToolCall, ToolInfo}};
+use crate::errors::AgentError;
 use anyhow::Result;
 pub trait ModelResponse {
     fn get_response(&self) -> Result<String>;

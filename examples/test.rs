@@ -1,14 +1,9 @@
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
-use ollama_rs::coordinator::Coordinator;
-use ollama_rs::generation::chat::ChatMessage;
-use ollama_rs::generation::options::GenerationOptions;
-use ollama_rs::generation::tools::implementations::{DDGSearcher, Scraper, SerperSearchTool};
-use ollama_rs::generation::tools::Tool;
-use ollama_rs::{tool_group, Ollama};
+use ollama_rs::generation::tools::implementations::{DDGSearcher, Scraper};
+use ollama_rs::tool_group;
 use smolagents::agents::{Agent, FunctionCallingAgent};
 use smolagents::models::ollama::OllamaModelBuilder;
-use smolagents::models::openai::OpenAIServerModel;
 use smolagents::tool::final_answer_tool::FinalAnswerTool;
 #[derive(Debug, Clone, ValueEnum)]
 enum AgentType {

@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use crate::errors::AgentError;
 use crate::models::model_traits::{Model, ModelResponse};
 use anyhow::Result;
-use ollama_rs::generation::tools::{ToolCall, ToolGroup, ToolInfo};
+use ollama_rs::generation::tools::{ToolCall, ToolInfo};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use ollama_rs::generation::chat::{ChatMessage, MessageRole};
 #[derive(Debug, Deserialize)]

@@ -8,7 +8,7 @@ pub struct Params {
     )]    answer: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Default)]
 pub struct FinalAnswerTool {}
 
 impl FinalAnswerTool {
