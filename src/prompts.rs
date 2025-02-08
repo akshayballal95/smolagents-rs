@@ -327,7 +327,11 @@ If no tool call is needed, use final_answer tool to return your answer.
 Now Begin! If you solve the task correctly and call the final_answer tool to give your answer, you will receive a reward of $1,000,000.
 "#;
 
-pub const FUNCTION_CALLING_SYSTEM_PROMPT: &str = r#"You are an expert assistant who can solve any task
+pub const FUNCTION_CALLING_SYSTEM_PROMPT: &str = r#"You are an expert assistant who can solve any task using  tool calls. You will be given a task to solve as best you can.
+To do so, you have been given access to the following tools: {{tool_names}}
+
+{{tool_descriptions}}
+
 {{managed_agents_descriptions}}
 
 Here are the rules you should always follow to solve your task:
@@ -337,5 +341,5 @@ Here are the rules you should always follow to solve your task:
 If no tool call is needed, use final_answer tool to return your answer.
 4. Never re-do a tool call that you previously did with the exact same parameters.
 
-Now Begin! If you solve the task correctly you will receive a reward of $1,000,000.
+Now Begin! If you solve the task correctly and call the final_answer tool to give your answer, you will receive a reward of $1,000,000.
 "#;

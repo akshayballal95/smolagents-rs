@@ -107,7 +107,7 @@ impl Model for OllamaModel {
         tools_to_call_from: Vec<ToolInfo>,
         max_tokens: Option<usize>,
         _args: Option<HashMap<String, Vec<String>>>,
-    ) -> Result<impl ModelResponse, AgentError> {
+    ) -> Result<Box<dyn ModelResponse>, AgentError> {
         let messages = messages
             .iter()
             .map(|message| {
@@ -142,7 +142,6 @@ impl Model for OllamaModel {
                 AgentError::Generation(format!("Failed to get response from Ollama: {}", e))
             })?;
         let output = response.json::<ChatMessageResponse>().await.unwrap();
-        println!("Output: {:?}", output);
-        Ok(output)
+        Ok(Box::new(output))
     }
 }

@@ -14,5 +14,5 @@ pub trait Model {
         tools: Vec<ToolInfo>,
         max_tokens: Option<usize>,
         args: Option<HashMap<String, Vec<String>>>,
-    ) -> impl Future<Output = Result<impl ModelResponse, AgentError>>;
+    ) -> impl Future<Output = Result<Box<dyn ModelResponse>, AgentError>>;
 }

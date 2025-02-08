@@ -57,8 +57,8 @@ async fn main() -> Result<()> {
     let tools = tool_group!(DDGSearcher::new(), Scraper::new(), FinalAnswerTool::new());
 
     // Create model
-    let model = OpenAIServerModel::new(args.model.as_deref(), None, args.api_key);
-    // let model = OllamaModelBuilder::new().model_id("qwen2.5").ctx_length(16384).build();
+    // let model = OpenAIServerModel::new(args.model.as_deref(), None, args.api_key);
+    let model = OllamaModelBuilder::new().model_id("qwen2.5").build();
 
     // Create agent based on type
     let mut agent = match args.agent_type {

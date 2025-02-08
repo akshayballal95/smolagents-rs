@@ -30,26 +30,31 @@ pub struct AssistantMessage {
 
 impl ModelResponse for OpenAIResponse {
     fn get_response(&self) -> Result<String> {
-        Ok(self
-            .choices
-            .first()
-            .unwrap()
-            .message
-            .content
-            .clone()
-            .unwrap_or_default())
+        // If content is None, it might be a tool call response
+        match &self.choices.first().unwrap().message.content {
+            Some(content) => Ok(content.clone()),
+            None => Ok("".to_string())
+        }
     }
 
     fn get_tools_used(&self) -> Result<Vec<ToolCall>> {
-        Ok(self
-            .choices
-            .first()
-            .unwrap()
-            .message
-            .tool_calls
-            .as_ref()
-            .unwrap_or(&vec![])
-            .clone())
+        if let Some(tool_calls) = &self.choices.first().unwrap().message.tool_calls {
+            // For each tool call, if the arguments are a string, parse them from JSON
+            let mut processed_tool_calls = vec![];
+            for tool_call in tool_calls {
+                let mut processed_tool_call = tool_call.clone();
+                if let Value::String(args_str) = &tool_call.function.arguments {
+                    // Parse the string arguments back into a JSON Value
+                    if let Ok(parsed_args) = serde_json::from_str(args_str) {
+                        processed_tool_call.function.arguments = parsed_args;
+                    }
+                }
+                processed_tool_calls.push(processed_tool_call);
+            }
+            Ok(processed_tool_calls)
+        } else {
+            Ok(vec![])
+        }
     }
 }
 
@@ -85,7 +90,7 @@ impl Model for OpenAIServerModel {
         tools_to_call_from: Vec<ToolInfo>,
         max_tokens: Option<usize>,
         args: Option<HashMap<String, Vec<String>>>,
-    ) -> Result<impl ModelResponse, AgentError> {
+    ) -> Result<Box<dyn ModelResponse>, AgentError> {
         let max_tokens = max_tokens.unwrap_or(1500);
         let messages = messages
             .iter()
@@ -133,7 +138,7 @@ impl Model for OpenAIServerModel {
             })?;
 
         match response.status() {
-            reqwest::StatusCode::OK => Ok(response.json::<OpenAIResponse>().await.unwrap()),
+            reqwest::StatusCode::OK => Ok(Box::new(response.json::<OpenAIResponse>().await.unwrap())),
             _ => Err(AgentError::Generation(format!(
                 "Failed to get response from OpenAI: {}",
                 response.text().await.unwrap()

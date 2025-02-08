@@ -251,7 +251,7 @@ impl<M: Model, T: ToolGroup> MultiStepAgent<M, T> {
             name,
             managed_agents,
             description,
-            max_steps: max_steps.unwrap_or(3),
+            max_steps: max_steps.unwrap_or(10),
             step_number: 0,
             task: "".to_string(),
             logs: Vec::new(),
@@ -548,7 +548,6 @@ impl<M: Model, T: ToolGroup> Agent for FunctionCallingAgent<M, T> {
                     let tool_call = model_message.get_tools_used();
 
                     if let Ok(tool_call) = tool_call {
-                        println!("Tool call: {:?}", tool_call.first().unwrap().function.name);
                         match tool_call.first().unwrap().function.name.as_str() {
                             "final_answer" => {
                                 info!("Final answer tool call: {:?}", tool_call);
@@ -561,10 +560,6 @@ impl<M: Model, T: ToolGroup> Agent for FunctionCallingAgent<M, T> {
                                 return Ok(Some(answer));
                             }
                             _ => {
-                                println!(
-                                    "Tool call other than final_answer: {:?}",
-                                    tool_call.first().unwrap().function.name
-                                );
                                 let tool_call = tool_call.first().unwrap().clone();
                                 step_log.tool_call = Some(tool_call.clone());
 
@@ -573,8 +568,7 @@ impl<M: Model, T: ToolGroup> Agent for FunctionCallingAgent<M, T> {
                                     match self.base_agent.tools.call(&tool_call.function).await {
                                         Ok(observation) => observation,
                                         Err(e) => {
-                                            info!("Error: {:?}", e);
-                                            return Ok(None);
+                                            e.to_string()
                                         }
                                     };
                                 step_log.observations = Some(observation.clone());
