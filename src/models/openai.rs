@@ -105,8 +105,6 @@ impl Model for OpenAIServerModel {
         }).collect::<Vec<_>>();
 
 
-        println!("Tools: {}", serde_json::to_string_pretty(&tools).unwrap());
-
         let mut body = json!({
             "model": self.model_id,
             "messages": messages,
