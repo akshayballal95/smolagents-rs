@@ -1,6 +1,6 @@
-use std::{collections::HashMap, future::Future};
-use ollama_rs::generation::tools::{ToolGroup, ToolInfo, ToolCall};
-use crate::{errors::AgentError,     models::types::Message};
+use std::{collections::HashMap, future::Future, sync::Arc};
+use ollama_rs::generation::{chat::ChatMessage, tools::{ToolCall, ToolGroup, ToolInfo}};
+use crate::{errors::AgentError};
 use anyhow::Result;
 pub trait ModelResponse {
     fn get_response(&self) -> Result<String>;
@@ -10,7 +10,7 @@ pub trait ModelResponse {
 pub trait Model {
     fn run(
         &self,
-        input_messages: Vec<Message>,
+        input_messages: Vec<ChatMessage>,
         tools: Vec<ToolInfo>,
         max_tokens: Option<usize>,
         args: Option<HashMap<String, Vec<String>>>,

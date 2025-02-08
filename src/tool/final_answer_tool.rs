@@ -26,7 +26,7 @@ impl Tool for FinalAnswerTool {
         "This tool is used to provide the final answer to the question"
     }
 
-    async fn call(&mut self, arguments: Self::Params) -> Result<String, Box<dyn std::error::Error>> {
+    async fn call(&mut self, arguments: Self::Params) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         Ok(arguments.answer)
     }
 }

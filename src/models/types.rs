@@ -13,8 +13,3 @@ pub enum MessageRole {
     ToolResponse,
 }
 
-#[derive(Debug, Serialize, Clone)]
-pub struct Message {
-    pub role: MessageRole,
-    pub content: String,
-}
