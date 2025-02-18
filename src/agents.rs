@@ -30,7 +30,7 @@ use serde_json::json;
 #[cfg(feature = "code-agent")]
 use {
     crate::errors::InterpreterError, crate::local_python_interpreter::LocalPythonInterpreter,
-    crate::models::openai::FunctionCall, crate::prompts::CODE_SYSTEM_PROMPT, regex::Regex,
+    crate::prompts::CODE_SYSTEM_PROMPT, regex::Regex,
 };
 
 const DEFAULT_TOOL_DESCRIPTION_TEMPLATE: &str = r#"
@@ -749,20 +749,21 @@ impl<M: Model + Debug> Agent for CodeAgent<M> {
                 let code = match parse_code_blobs(&response) {
                     Ok(code) => code,
                     Err(e) => {
-                        step_log.error = Some(e);
+                        step_log.error = Some(e.clone());
+                        info!("Error: {}", response + "\n" + &e.clone().to_string());
                         return Ok(None);
                     }
                 };
 
                 info!("Code: {}", code);
-                step_log.tool_call = Some(ToolCall {
-                    id: None,
-                    call_type: Some("function".to_string()),
-                    function: FunctionCall {
-                        name: "python_interpreter".to_string(),
-                        arguments: serde_json::json!({ "code": code }),
-                    },
-                });
+                // step_log.tool_call = Some(ToolCall {
+                //     id: None,
+                //     call_type: Some("function".to_string()),
+                //     function: FunctionCall {
+                //         name: "python_interpreter".to_string(),
+                //         arguments: serde_json::json!({ "code": code }),
+                //     },
+                // });
                 let result = self.local_python_interpreter.forward(&code, &mut None);
                 match result {
                     Ok(result) => {
