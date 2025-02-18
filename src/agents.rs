@@ -1,9 +1,8 @@
-
 //! This module contains the agents that can be used to solve tasks.
 //!
 //! Currently, there are two agents:
 //! - The function calling agent. This agent is used for models that have tool calling capabilities.
-//! - The code agent. This agent takes tools and can write simple python code that is executed to solve the task. 
+//! - The code agent. This agent takes tools and can write simple python code that is executed to solve the task.
 //! To use this agent you need to enable the `code-agent` feature.
 //!
 //! You can also implement your own agents by implementing the `Agent` trait.
@@ -15,8 +14,9 @@ use crate::models::model_traits::Model;
 use crate::models::openai::ToolCall;
 use crate::models::types::Message;
 use crate::models::types::MessageRole;
+use crate::prompts::FUNCTION_CALLING_SYSTEM_PROMPT;
 use crate::prompts::{
-    user_prompt_plan, TOOL_CALLING_SYSTEM_PROMPT, SYSTEM_PROMPT_FACTS, SYSTEM_PROMPT_PLAN,
+    user_prompt_plan, SYSTEM_PROMPT_FACTS, SYSTEM_PROMPT_PLAN, TOOL_CALLING_SYSTEM_PROMPT,
 };
 use crate::tools::{AnyTool, FinalAnswerTool, ToolGroup, ToolInfo};
 use std::collections::HashMap;
@@ -32,8 +32,6 @@ use {
     crate::errors::InterpreterError, crate::local_python_interpreter::LocalPythonInterpreter,
     crate::models::openai::FunctionCall, crate::prompts::CODE_SYSTEM_PROMPT, regex::Regex,
 };
-
-
 
 const DEFAULT_TOOL_DESCRIPTION_TEMPLATE: &str = r#"
 {{ tool.name }}: {{ tool.description }}
@@ -108,6 +106,7 @@ pub trait Agent {
     fn name(&self) -> &'static str;
     fn get_max_steps(&self) -> usize;
     fn get_step_number(&self) -> usize;
+    fn reset_step_number(&mut self);
     fn increment_step_number(&mut self);
     fn get_logs_mut(&mut self) -> &mut Vec<Step>;
     fn set_task(&mut self, task: &str);
@@ -120,6 +119,7 @@ pub trait Agent {
     fn direct_run(&mut self, _task: &str) -> Result<String> {
         let mut final_answer: Option<String> = None;
         while final_answer.is_none() && self.get_step_number() < self.get_max_steps() {
+            println!("Step number: {:?}", self.get_step_number());
             let mut step_log = Step::ActionStep(AgentStep {
                 agent_memory: None,
                 llm_output: None,
@@ -156,6 +156,7 @@ pub trait Agent {
         if reset {
             self.get_logs_mut().clear();
             self.get_logs_mut().push(system_prompt_step);
+            self.reset_step_number();
         } else if self.get_logs_mut().is_empty() {
             self.get_logs_mut().push(system_prompt_step);
         } else {
@@ -340,6 +341,9 @@ impl<M: Model + Debug> Agent for MultiStepAgent<M> {
     fn increment_step_number(&mut self) {
         self.step_number += 1;
     }
+    fn reset_step_number(&mut self) {
+        self.step_number = 0;
+    }
     fn get_logs_mut(&mut self) -> &mut Vec<Step> {
         &mut self.logs
     }
@@ -522,7 +526,7 @@ impl<M: Model + Debug> FunctionCallingAgent<M> {
         description: Option<&str>,
         max_steps: Option<usize>,
     ) -> Result<Self> {
-        let system_prompt = system_prompt.unwrap_or(TOOL_CALLING_SYSTEM_PROMPT);
+        let system_prompt = system_prompt.unwrap_or(FUNCTION_CALLING_SYSTEM_PROMPT);
         let base_agent = MultiStepAgent::new(
             model,
             tools,
@@ -550,6 +554,9 @@ impl<M: Model + Debug> Agent for FunctionCallingAgent<M> {
     }
     fn get_step_number(&self) -> usize {
         self.base_agent.get_step_number()
+    }
+    fn reset_step_number(&mut self) {
+        self.base_agent.reset_step_number();
     }
     fn increment_step_number(&mut self) {
         self.base_agent.increment_step_number();
@@ -591,14 +598,16 @@ impl<M: Model + Debug> Agent for FunctionCallingAgent<M> {
                     .unwrap();
 
                 let mut observations = Vec::new();
+                let tools = model_message.get_tools_used()?;
 
                 if let Ok(response) = model_message.get_response() {
                     if !response.trim().is_empty() {
-                        observations.push(response);
+                        observations.push(response.clone());
+                    }
+                    if tools.is_empty() {
+                        return Ok(Some(response));
                     }
                 }
-
-                let tools = model_message.get_tools_used()?;
 
                 for tool in tools {
                     let function_name = tool.clone().function.name;
@@ -630,14 +639,15 @@ impl<M: Model + Debug> Agent for FunctionCallingAgent<M> {
                                     info!("Error: {}", e);
                                 }
                             }
-                            step_log.observations = Some(observations.join("\n"));
-                            info!(
-                                "Observation: {}",
-                                step_log.observations.clone().unwrap_or_default().trim()
-                            );
                         }
                     }
                 }
+                step_log.observations = Some(observations.join("\n"));
+
+                info!(
+                    "Observation: {}",
+                    step_log.observations.clone().unwrap_or_default().trim()
+                );
                 Ok(None)
             }
             _ => {
@@ -704,6 +714,9 @@ impl<M: Model + Debug> Agent for CodeAgent<M> {
     }
     fn get_logs_mut(&mut self) -> &mut Vec<Step> {
         self.base_agent.get_logs_mut()
+    }
+    fn reset_step_number(&mut self) {
+        self.base_agent.reset_step_number()
     }
     fn set_task(&mut self, task: &str) {
         self.base_agent.set_task(task);

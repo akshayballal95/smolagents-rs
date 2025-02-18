@@ -126,7 +126,6 @@ impl Model for OllamaModel {
             "tools": tools,
             "max_tokens": max_tokens.unwrap_or(1500),
         });
-
         if let Some(args) = args {
             for (key, value) in args {
                 body["options"][key] = json!(value);

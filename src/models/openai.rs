@@ -95,21 +95,14 @@ impl ModelResponse for OpenAIResponse {
     }
 
     fn get_tools_used(&self) -> Result<Vec<ToolCall>, AgentError> {
-        if let Some(tool_calls) = &self
+        Ok(self
             .choices
             .first()
-            .ok_or(AgentError::Generation(
-                "No message returned from OpenAI".to_string(),
-            ))?
+            .ok_or(AgentError::Generation("No message returned from OpenAI".to_string()))?
             .message
             .tool_calls
-        {
-            Ok(tool_calls.clone())
-        } else {
-            Err(AgentError::Generation(
-                "No tool calls returned from OpenAI".to_string(),
-            ))
-        }
+            .clone()
+            .unwrap_or_default())
     }
 }
 
