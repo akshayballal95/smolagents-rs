@@ -233,7 +233,8 @@ pub trait Agent {
                             .map(|tool_call| -> Message {
                                 Message {
                                     role: MessageRole::Assistant,
-                                    content: serde_json::to_string_pretty(&tool_call).unwrap_or_default(),
+                                    content: serde_json::to_string_pretty(&tool_call)
+                                        .unwrap_or_default(),
                                 }
                             })
                             .collect::<Vec<_>>();
@@ -250,7 +251,7 @@ pub trait Agent {
                     if step_log.tool_call.is_some()
                         && (step_log.error.is_some() || step_log.observations.is_some())
                     {
-                        let tool_calls = step_log.tool_call.as_ref().unwrap();
+                        let tool_calls = step_log.tool_call.as_ref().unwrap(); // Its fine to unwrap because we check for None above
                         let observations = match step_log.observations.as_ref() {
                             Some(obs) => obs,
                             None => &vec![],
@@ -674,17 +675,16 @@ impl<M: Model + Debug> Agent for FunctionCallingAgent<M> {
                                         function_name,
                                         observation.chars().take(30000).collect::<String>()
                                     ));
+                                    match &mut step_log.error {
+                                        Some(errors) => errors.push(None),
+                                        None => step_log.error = Some(vec![None]),
+                                    }
                                 }
                                 Err(e) => {
+                                    observations.push("".to_string());
                                     match &mut step_log.error {
-                                        Some(errors) => {
-                                            errors.push(Some(AgentError::Execution(e.to_string())));
-                                        }
-                                        None => {
-                                            step_log.error = Some(vec![Some(
-                                                AgentError::Execution(e.to_string()),
-                                            )]);
-                                        }
+                                        Some(errors) => errors.push(Some(AgentError::Execution(e.to_string()))),
+                                        None => step_log.error = Some(vec![Some(AgentError::Execution(e.to_string()))]),
                                     }
                                     info!("Error: {}", e);
                                 }
@@ -851,7 +851,9 @@ impl<M: Model + Debug> Agent for CodeAgent<M> {
                                     errors.push(Some(AgentError::Execution(e.to_string())));
                                 }
                                 None => {
-                                    step_log.error = Some(vec![Some(AgentError::Execution(e.to_string()))]);
+                                    step_log.error =
+                                        Some(vec![Some(AgentError::Execution(e.to_string()))]);
+                                    step_log.observations = Some(vec!["".to_string()]);
                                 }
                             }
                             info!("Error: {}", e);
