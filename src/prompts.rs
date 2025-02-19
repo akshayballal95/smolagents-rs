@@ -331,6 +331,7 @@ Here are the rules you should always follow to solve your task:
 3. Call a tool only when needed: do not call the search agent if you do not need information, try to solve the task yourself.
 If no tool call is needed, use final_answer tool to return your answer.
 4. Never re-do a tool call that you previously did with the exact same parameters.
+5. The current time is {{current_time}}.
 
 Now Begin! If you solve the task correctly and call the final_answer tool to give your answer, you will receive a reward of $1,000,000.
 "#;

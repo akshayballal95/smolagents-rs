@@ -148,6 +148,7 @@ impl Model for OpenAIServerModel {
         args: Option<HashMap<String, Vec<String>>>,
     ) -> Result<Box<dyn ModelResponse>, AgentError> {
         let max_tokens = max_tokens.unwrap_or(1500);
+
         let messages = messages
             .iter()
             .map(|message| {
@@ -157,7 +158,6 @@ impl Model for OpenAIServerModel {
                 })
             })
             .collect::<Vec<_>>();
-
         let mut body = json!({
             "model": self.model_id,
             "messages": messages,

@@ -33,7 +33,7 @@ impl VisitWebsiteTool {
             Err(_) => Url::parse(&format!("https://{}", url)).unwrap(),
         };
 
-        let response = client.get(url).send();
+        let response = client.get(url.clone()).send();
 
         match response {
             Ok(resp) => {
@@ -41,7 +41,7 @@ impl VisitWebsiteTool {
                     match resp.text() {
                         Ok(text) => {
                             let converter = HtmlToMarkdown::builder()
-                                .skip_tags(vec!["script", "style"])
+                                .skip_tags(vec!["script", "style", "header", "nav", "footer"])
                                 .build();
                             converter.convert(&text).unwrap()
                         }
@@ -51,13 +51,14 @@ impl VisitWebsiteTool {
                     "The website appears to be blocking automated access. Try visiting the URL directly in your browser.".to_string()
                 } else {
                     format!(
-                        "Failed to fetch the webpage: HTTP {} - {}",
+                        "Failed to fetch the webpage {}: HTTP {} - {}",
+                        url,
                         resp.status(),
                         resp.status().canonical_reason().unwrap_or("Unknown Error")
                     )
                 }
             }
-            Err(e) => format!("Failed to make the request: {}", e),
+            Err(e) => format!("Failed to make the request to {}: {}", url, e),
         }
     }
 }
@@ -92,7 +93,8 @@ mod tests {
     #[test]
     fn test_visit_website_tool() {
         let tool = VisitWebsiteTool::new();
-        let url = "www.rust-lang.org/";
+        let url = "https://finance.yahoo.com/quote/NVDA";
         let _result = tool.forward(&url);
+        println!("{}", _result);
     }
 }

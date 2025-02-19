@@ -13,8 +13,26 @@ pub enum MessageRole {
     ToolResponse,
 }
 
+impl std::fmt::Display for MessageRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MessageRole::User => write!(f, "User"),
+            MessageRole::Assistant => write!(f, "Assistant"),
+            MessageRole::System => write!(f, "System"),
+            MessageRole::ToolCall => write!(f, "ToolCall"),
+            MessageRole::ToolResponse => write!(f, "ToolResponse"),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct Message {
     pub role: MessageRole,
     pub content: String,
+}
+
+impl std::fmt::Display for Message {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Message(role: {}, content: {})", self.role, self.content)
+    }
 }

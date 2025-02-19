@@ -95,8 +95,12 @@ impl Tool for DuckDuckGoSearchTool {
     fn forward(&self, arguments: DuckDuckGoSearchToolParams) -> Result<String> {
         let query = arguments.query;
         let results = self.forward(&query)?;
-        let json_string = serde_json::to_string_pretty(&results)?;
-        Ok(json_string)
+        let results_string = results
+            .iter()
+            .map(|r| format!("[{}]({}) \n{}", r.title, r.url, r.snippet))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        Ok(results_string)
     }
 }
 

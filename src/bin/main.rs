@@ -1,9 +1,7 @@
-use std::collections::HashMap;
-use std::io::{self, Write};
-use colored::*;
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
-use smolagents_rs::agents::{Agent, FunctionCallingAgent, CodeAgent};
+use colored::*;
+use smolagents_rs::agents::{Agent, CodeAgent, FunctionCallingAgent};
 use smolagents_rs::errors::AgentError;
 use smolagents_rs::models::model_traits::{Model, ModelResponse};
 use smolagents_rs::models::ollama::{OllamaModel, OllamaModelBuilder};
@@ -12,6 +10,11 @@ use smolagents_rs::models::types::Message;
 use smolagents_rs::tools::{
     AnyTool, DuckDuckGoSearchTool, GoogleSearchTool, ToolInfo, VisitWebsiteTool,
 };
+use std::collections::HashMap;
+use std::io::{self, Write};
+use smolagents_rs::agents::Step;
+use serde_json;
+use std::fs::File;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum AgentType {
@@ -48,6 +51,12 @@ impl AgentWrapper {
         match self {
             AgentWrapper::FunctionCalling(agent) => agent.run(task, stream, reset),
             AgentWrapper::Code(agent) => agent.run(task, stream, reset),
+        }
+    }
+    fn get_logs_mut(&mut self) -> &mut Vec<Step> {
+        match self {
+            AgentWrapper::FunctionCalling(agent) => agent.get_logs_mut(),
+            AgentWrapper::Code(agent) => agent.get_logs_mut(),
         }
     }
 }
@@ -108,7 +117,7 @@ fn create_tool(tool_type: &ToolType) -> Box<dyn AnyTool> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    
+
     let tools: Vec<Box<dyn AnyTool>> = args.tools.iter().map(create_tool).collect();
 
     // Create model based on type
@@ -129,19 +138,30 @@ fn main() -> Result<()> {
 
     // Create agent based on type
     let mut agent = match args.agent_type {
-        AgentType::FunctionCalling => {
-            AgentWrapper::FunctionCalling(FunctionCallingAgent::new(model, tools, None, None, Some("CLI Agent"), None)?)
-        }
-        AgentType::Code => {
-            AgentWrapper::Code(CodeAgent::new(model, tools, None, None, Some("CLI Agent"), None)?)
-        }
+        AgentType::FunctionCalling => AgentWrapper::FunctionCalling(FunctionCallingAgent::new(
+            model,
+            tools,
+            None,
+            None,
+            Some("CLI Agent"),
+            None,
+        )?),
+        AgentType::Code => AgentWrapper::Code(CodeAgent::new(
+            model,
+            tools,
+            None,
+            None,
+            Some("CLI Agent"),
+            None,
+        )?),
     };
 
+    let mut file: File = File::create("logs.txt")?;
 
     loop {
         print!("{}", "User: ".yellow().bold());
         io::stdout().flush()?;
-        
+
         let mut task = String::new();
         io::stdin().read_line(&mut task)?;
         let task = task.trim();
@@ -157,6 +177,13 @@ fn main() -> Result<()> {
 
         // Run the agent with the task from stdin
         let _result = agent.run(task, args.stream, true)?;
+        // Get the last log entry and serialize it in a controlled way
+
+        let logs = agent.get_logs_mut();
+        for log in logs {
+            // Serialize to JSON with pretty printing
+            serde_json::to_writer_pretty(&mut file, &log)?;
+        }
     }
     Ok(())
 }

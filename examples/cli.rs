@@ -11,6 +11,9 @@ use smolagents_rs::models::types::Message;
 use smolagents_rs::tools::{
     AnyTool, DuckDuckGoSearchTool, GoogleSearchTool, ToolInfo, VisitWebsiteTool,
 };
+use std::fs::File;
+use smolagents_rs::agents::Step;
+use serde_json;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum AgentType {
@@ -47,6 +50,12 @@ impl AgentWrapper {
         match self {
             AgentWrapper::FunctionCalling(agent) => agent.run(task, stream, reset),
             AgentWrapper::Code(agent) => agent.run(task, stream, reset),
+        }
+    }
+    fn get_logs_mut(&mut self) -> &mut Vec<Step> {
+        match self {
+            AgentWrapper::FunctionCalling(agent) => agent.get_logs_mut(),
+            AgentWrapper::Code(agent) => agent.get_logs_mut(),
         }
     }
 }
@@ -143,6 +152,16 @@ fn main() -> Result<()> {
 
     // Run the agent with the task from stdin
     let _result = agent.run(&args.task, args.stream, args.reset)?;
+    let logs = agent.get_logs_mut();
+
+    // store logs in a file
+    let mut file = File::create("logs.txt")?;
+    
+    // Get the last log entry and serialize it in a controlled way
+    for log in logs {
+        // Serialize to JSON with pretty printing
+        serde_json::to_writer_pretty(&mut file, &log)?;
+    }
     
     Ok(())
 }
