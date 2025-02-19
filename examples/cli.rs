@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
-use smolagents_rs::agents::{Agent, FunctionCallingAgent, CodeAgent};
+use serde_json;
+use smolagents_rs::agents::Step;
+use smolagents_rs::agents::{Agent, CodeAgent, FunctionCallingAgent};
 use smolagents_rs::errors::AgentError;
 use smolagents_rs::models::model_traits::{Model, ModelResponse};
 use smolagents_rs::models::ollama::{OllamaModel, OllamaModelBuilder};
@@ -12,8 +14,6 @@ use smolagents_rs::tools::{
     AnyTool, DuckDuckGoSearchTool, GoogleSearchTool, ToolInfo, VisitWebsiteTool,
 };
 use std::fs::File;
-use smolagents_rs::agents::Step;
-use serde_json;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum AgentType {
@@ -108,6 +108,10 @@ struct Args {
     /// The task to execute
     #[arg(short, long)]
     task: String,
+
+    /// Base URL for the API
+    #[arg(short, long)]
+    base_url: Option<String>,
 }
 
 fn create_tool(tool_type: &ToolType) -> Box<dyn AnyTool> {
@@ -120,13 +124,13 @@ fn create_tool(tool_type: &ToolType) -> Box<dyn AnyTool> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    
+
     let tools: Vec<Box<dyn AnyTool>> = args.tools.iter().map(create_tool).collect();
 
     // Create model based on type
     let model = match args.model_type {
         ModelType::OpenAI => ModelWrapper::OpenAI(OpenAIServerModel::new(
-            Some("https://api.openai.com/v1/chat/completions"),
+            args.base_url.as_deref(),
             Some(&args.model_id),
             None,
             args.api_key,
@@ -141,14 +145,23 @@ fn main() -> Result<()> {
 
     // Create agent based on type
     let mut agent = match args.agent_type {
-        AgentType::FunctionCalling => {
-            AgentWrapper::FunctionCalling(FunctionCallingAgent::new(model, tools, None, None, Some("CLI Agent"), None)?)
-        }
-        AgentType::Code => {
-            AgentWrapper::Code(CodeAgent::new(model, tools, None, None, Some("CLI Agent"), None)?)
-        }
+        AgentType::FunctionCalling => AgentWrapper::FunctionCalling(FunctionCallingAgent::new(
+            model,
+            tools,
+            None,
+            None,
+            Some("CLI Agent"),
+            None,
+        )?),
+        AgentType::Code => AgentWrapper::Code(CodeAgent::new(
+            model,
+            tools,
+            None,
+            None,
+            Some("CLI Agent"),
+            None,
+        )?),
     };
-
 
     // Run the agent with the task from stdin
     let _result = agent.run(&args.task, args.stream, args.reset)?;
@@ -156,12 +169,12 @@ fn main() -> Result<()> {
 
     // store logs in a file
     let mut file = File::create("logs.txt")?;
-    
+
     // Get the last log entry and serialize it in a controlled way
     for log in logs {
         // Serialize to JSON with pretty printing
         serde_json::to_writer_pretty(&mut file, &log)?;
     }
-    
+
     Ok(())
 }

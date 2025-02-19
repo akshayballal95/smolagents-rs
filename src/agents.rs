@@ -251,7 +251,10 @@ pub trait Agent {
                         && (step_log.error.is_some() || step_log.observations.is_some())
                     {
                         let tool_calls = step_log.tool_call.as_ref().unwrap();
-                        let observations = step_log.observations.as_ref().unwrap();
+                        let observations = match step_log.observations.as_ref() {
+                            Some(obs) => obs,
+                            None => &vec![],
+                        };
                         let default_errors = vec![None; tool_calls.len()];
                         let errors = step_log.error.as_ref().unwrap_or(&default_errors);
 
@@ -821,7 +824,7 @@ impl<M: Model + Debug> Agent for CodeAgent<M> {
                         arguments: serde_json::json!({ "code": code }),
                     },
                 }]);
-                let result = self.local_python_interpreter.forward(&code, &mut None);
+                let result = self.local_python_interpreter.forward(&code);
                 match result {
                     Ok(result) => {
                         let (result, execution_logs) = result;

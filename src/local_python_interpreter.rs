@@ -434,9 +434,10 @@ fn evaluate_stmt(
             Ok(CustomConstant::Str(String::new()))
         }
 
-        _ => Err(InterpreterError::RuntimeError(
-            "Unsupported statement".to_string(),
-        )),
+        _ => Err(InterpreterError::RuntimeError(format!(
+            "Unsupported statement {:?}",
+            node
+        ))),
     }
 }
 
@@ -1010,6 +1011,7 @@ pub fn evaluate_python_code(
 pub struct LocalPythonInterpreter {
     static_tools: HashMap<String, ToolFunction>,
     custom_tools: HashMap<String, CustomToolFunction>,
+    state: HashMap<String, Box<dyn Any>>,
 }
 
 impl LocalPythonInterpreter {
@@ -1020,17 +1022,16 @@ impl LocalPythonInterpreter {
         Self {
             static_tools,
             custom_tools,
+            state: HashMap::new(),
         }
     }
     pub fn forward(
-        &self,
+        &mut self,
         code: &str,
-        state: &mut Option<HashMap<String, Box<dyn Any>>>,
     ) -> Result<(String, String), InterpreterError> {
-        let mut empty_state = HashMap::new();
         let ast = ast::Suite::parse(code, "<embedded>")
             .map_err(|e| InterpreterError::SyntaxError(e.to_string()))?;
-        let state = state.as_mut().unwrap_or(&mut empty_state);
+        let state = &mut self.state;
         let result = evaluate_ast(&ast, state, &self.static_tools, &self.custom_tools)?;
 
         let mut empty_string = Vec::new();
@@ -1280,10 +1281,9 @@ for place in dinner_places:
     print(f"{place['title']}: {place['url']}")
         "#,
         );
-        let state = HashMap::new();
-        let local_python_interpreter = LocalPythonInterpreter::new(vec![]);
+        let mut local_python_interpreter = LocalPythonInterpreter::new(vec![]);
         let (_, execution_logs) = local_python_interpreter
-            .forward(&code, &mut Some(state))
+            .forward(&code)
             .unwrap();
         assert_eq!(execution_logs, "25 Best Restaurants in Berlin, By Local Foodies: https://www.timeout.com/berlin/restaurants/best-restaurants-in-berlin\nThe 38 Best Berlin Restaurants - Eater: https://www.eater.com/maps/best-restaurants-berlin\nTHE 10 BEST Restaurants in Berlin - Tripadvisor: https://www.tripadvisor.com/Restaurants-g187323-Berlin.html\n12 Unique Restaurants in Berlin: https://www.myglobalviewpoint.com/unique-restaurants-in-berlin/\nBerlin's best restaurants: 101 places to eat right now: https://www.the-berliner.com/food/best-restaurants-berlin-101-places-to-eat/");
 
@@ -1313,10 +1313,9 @@ for movie in movies:
 
         "#,
         );
-        let state = HashMap::new();
-        let local_python_interpreter = LocalPythonInterpreter::new(vec![]);
+        let mut local_python_interpreter = LocalPythonInterpreter::new(vec![]);
         let (_, _) = local_python_interpreter
-            .forward(&code, &mut Some(state))
+            .forward(&code)
             .unwrap();
 
         let code = textwrap::dedent(
@@ -1409,35 +1408,31 @@ print(movies)
     fn test_evaluate_python_code_with_error() {
         let code = textwrap::dedent(
             r#"
-cycling_paths = [
-    {
-        "title": "5x Cycling routes in and around Eindhoven",
-        "snippet": "One of the well-known cycling routes in and around Eindhoven is Rondje Eindhoven, which means 'around Eindhoven'. This route starts in four different directions. The distances are between 20 and 75 kilometres and take you through the city center, a number of dynamic districts, and beautiful nature.",
-        "url": "https://www.thisiseindhoven.com/en/see-and-do/fun-things-to-do/cycling-routes-in-and-around-eindhoven"
-    },
-    {
-        "title": "Top 5 Bike Rides and Cycling Routes around Eindhoven - Komoot",
-        "snippet": "Explore the top cycling routes around Eindhoven to experience more of this area. We bring you the top bike rides around Eindhoven — all you've got to do is pick the one that's right for you.",
-        "url": "https://www.komoot.com/guide/893152/cycling-around-eindhoven"
-    },
-    {
-        "title": "Cycling routes in Eindhoven - Bikemap",
-        "snippet": "Find cycle routes in Eindhoven: Round trips | Relaxed routes | Gravel routes | Road bike routes | MTB routes | Trekking routes.",
-        "url": "https://www.bikemap.net/en/l/2756253/"
-    }
-]
-
-print("\n".join([f"{path['title']}: {path['snippet']} (More info: {path['url']})" for path in cycling_paths]))
-
+guidelines = (
+    "To avoid being blocked by websites, use the following guidelines for user agent strings:\n"
+    "1. Use a valid browser user agent to mimic a real web browser.\n"
+    "2. Rotate User-Agent headers for each outgoing request to prevent identification as a bot.\n"
+    "3. Avoid using generic user-agent strings like 'Python Requests Library' or an empty UA string.\n"
+    "4. Use a user agent string that includes information about the browser, operating system, and other parameters.\n"
+    "5. Understand that websites use user agent strings to organize protection against malicious actions, including parsing blocks."
+)
 
     "#,
         );
-        let state = HashMap::new();
+        let code_2 = textwrap::dedent(
+            r#"
+            print(guidelines)
+            "#,
+        );
         let tools: Vec<Box<dyn AnyTool>> = vec![Box::new(VisitWebsiteTool::new())];
-        let local_python_interpreter = LocalPythonInterpreter::new(tools);
+        let mut local_python_interpreter = LocalPythonInterpreter::new(tools);
         let (_, logs) = local_python_interpreter
-            .forward(&code, &mut Some(state))
+            .forward(&code)
             .unwrap();
         println!("logs: {:?}", logs);
+        let (_, logs_2) = local_python_interpreter
+            .forward(&code_2)
+            .unwrap();
+        println!("logs_2: {:?}", logs_2);
     }
 }

@@ -24,7 +24,7 @@ This is a rust implementation of HF [smolagents](https://github.com/huggingface/
 
 ### Models
 
-- [x] OpenAI Models (e.g., GPT-4, GPT-4 Turbo)
+- [x] OpenAI Models (e.g., GPT-4o, GPT-4o-mini)
 - [x] Ollama Integration
 - [ ] Hugging Face API support
 - [ ] Open-source model integration via Candle
@@ -35,6 +35,8 @@ This is a rust implementation of HF [smolagents](https://github.com/huggingface/
 - [x] Tool-Calling Agent
 - [x] CodeAgent
 - [ ] Planning Agent
+
+The code agent is still in development, so there might be python code that is not yet supported and may cause errors. Try using the tool-calling agent for now.
 
 ### Tools
 
