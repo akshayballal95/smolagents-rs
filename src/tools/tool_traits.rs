@@ -125,4 +125,3 @@ impl<T: Tool + Clone + 'static> AnyTool for T {
         Box::new(self.clone())
     }
 }
-

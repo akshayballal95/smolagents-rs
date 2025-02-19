@@ -68,4 +68,3 @@ impl fmt::Display for InterpreterError {
         }
     }
 }
-

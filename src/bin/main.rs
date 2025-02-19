@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use colored::*;
+use smolagents_rs::agents::Step;
 use smolagents_rs::agents::{Agent, CodeAgent, FunctionCallingAgent};
 use smolagents_rs::errors::AgentError;
 use smolagents_rs::models::model_traits::{Model, ModelResponse};
@@ -11,10 +12,8 @@ use smolagents_rs::tools::{
     AnyTool, DuckDuckGoSearchTool, GoogleSearchTool, ToolInfo, VisitWebsiteTool,
 };
 use std::collections::HashMap;
-use std::io::{self, Write};
-use smolagents_rs::agents::Step;
-use serde_json;
 use std::fs::File;
+use std::io::{self, Write};
 
 #[derive(Debug, Clone, ValueEnum)]
 enum AgentType {

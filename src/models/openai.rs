@@ -98,7 +98,9 @@ impl ModelResponse for OpenAIResponse {
         Ok(self
             .choices
             .first()
-            .ok_or(AgentError::Generation("No message returned from OpenAI".to_string()))?
+            .ok_or(AgentError::Generation(
+                "No message returned from OpenAI".to_string(),
+            ))?
             .message
             .tool_calls
             .clone()

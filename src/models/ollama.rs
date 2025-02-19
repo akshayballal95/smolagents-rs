@@ -114,7 +114,7 @@ impl Model for OllamaModel {
             .collect::<Vec<_>>();
 
         let tools = json!(tools_to_call_from);
-        
+
         let mut body = json!({
             "model": self.model_id,
             "messages": messages,

@@ -3,6 +3,7 @@
 //! Currently, there are two agents:
 //! - The function calling agent. This agent is used for models that have tool calling capabilities.
 //! - The code agent. This agent takes tools and can write simple python code that is executed to solve the task.
+//!
 //! To use this agent you need to enable the `code-agent` feature.
 //!
 //! You can also implement your own agents by implementing the `Agent` trait.
@@ -240,59 +241,36 @@ pub trait Agent {
                             .collect::<Vec<_>>();
                         memory.extend(tool_call_message);
                     }
-                    if step_log.tool_call.is_none() && step_log.error.is_some() {
-                        let error_string = step_log.error.clone().unwrap().iter().filter_map(|error| error.as_ref().map(|e| e.message())).collect::<Vec<_>>().join("\n")+"\nNow let's retry: take care not to repeat previous errors! If you have retried several times, try a completely different approach.\n";
-                        let message_content = "Error: ".to_owned() + &error_string;
-                        memory.push(Message {
-                            role: MessageRole::Assistant,
-                            content: message_content,
-                        });
-                    }
-                    if step_log.tool_call.is_some()
-                        && (step_log.error.is_some() || step_log.observations.is_some())
+
+                    if let (Some(tool_calls), Some(observations)) =
+                        (&step_log.tool_call, &step_log.observations)
                     {
-                        let tool_calls = step_log.tool_call.as_ref().unwrap(); // Its fine to unwrap because we check for None above
-                        let observations = match step_log.observations.as_ref() {
-                            Some(obs) => obs,
-                            None => &vec![],
-                        };
-                        let default_errors = vec![None; tool_calls.len()];
-                        let errors = step_log.error.as_ref().unwrap_or(&default_errors);
-
                         for (i, tool_call) in tool_calls.iter().enumerate() {
-                            let mut message_content =
-                                format!("Call id: {}\n", tool_call.id.clone().unwrap_or_default());
+                            let message_content = format!(
+                                "Call id: {}\nObservation: {}",
+                                tool_call.id.as_deref().unwrap_or_default(),
+                                observations[i]
+                            );
 
-                            if let Some(error) = errors.get(i).and_then(|e| e.as_ref()) {
-                                message_content.push_str(&format!(
-                                    "Error: {}\nNow let's retry: take care not to repeat previous errors! If you have retried several times, try a completely different approach.\n",
-                                    error.message()
-                                ));
-                            } else if i < observations.len() {
-                                message_content
-                                    .push_str(&format!("Observation: {}", observations[i]));
-                            }
-
-                            let tool_message = Message {
+                            memory.push(Message {
                                 role: MessageRole::User,
                                 content: message_content,
-                            };
-                            memory.push(tool_message);
+                            });
                         }
-                    } else if step_log.observations.is_some()
-                        || step_log.error.is_some() && step_log.tool_call.is_none()
-                    {
-                        let mut message_content = "".to_string();
-                        if step_log.error.is_some() {
-                            let error_string = step_log.error.as_ref().unwrap().iter().filter_map(|error| error.as_ref().map(|e| e.message())).collect::<Vec<_>>().join("\n")+"\nNow let's retry: take care not to repeat previous errors! If you have retried several times, try a completely different approach.\n";
-                            message_content = "Error: ".to_owned() + &error_string;
-                        } else if step_log.observations.is_some() {
-                            message_content = "Observations: ".to_owned()
-                                + step_log.observations.as_ref().unwrap().join("\n").as_str();
-                        }
+                    } else if let Some(observations) = &step_log.observations {
                         memory.push(Message {
                             role: MessageRole::User,
-                            content: message_content,
+                            content: format!("Observations: {}", observations.join("\n")),
+                        });
+                    }
+                    if step_log.error.is_some() {
+                        let error_string =
+                            "Error: ".to_owned() + step_log.error.clone().unwrap().message(); // Its fine to unwrap because we check for None above
+
+                        let error_string = error_string + "\nNow let's retry: take care not to repeat previous errors! If you have retried several times, try a completely different approach.\n";
+                        memory.push(Message {
+                            role: MessageRole::User,
+                            content: error_string,
                         });
                     }
                 }
@@ -330,14 +308,14 @@ pub struct AgentStep {
     agent_memory: Option<Vec<Message>>,
     llm_output: Option<String>,
     tool_call: Option<Vec<ToolCall>>,
-    error: Option<Vec<Option<AgentError>>>,
+    error: Option<AgentError>,
     observations: Option<Vec<String>>,
     _step: usize,
 }
 
 impl std::fmt::Display for AgentStep {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "AgentStep({})", self)
+        write!(f, "AgentStep({:?})", self)
     }
 }
 
@@ -634,6 +612,7 @@ impl<M: Model + Debug> Agent for FunctionCallingAgent<M> {
 
                 let mut observations = Vec::new();
                 let tools = model_message.get_tools_used()?;
+                step_log.tool_call = Some(tools.clone());
 
                 if let Ok(response) = model_message.get_response() {
                     if !response.trim().is_empty() {
@@ -643,7 +622,6 @@ impl<M: Model + Debug> Agent for FunctionCallingAgent<M> {
                         return Ok(Some(response));
                     }
                 }
-
                 for tool in tools {
                     let function_name = tool.clone().function.name;
 
@@ -655,14 +633,6 @@ impl<M: Model + Debug> Agent for FunctionCallingAgent<M> {
                             return Ok(Some(answer));
                         }
                         _ => {
-                            match &mut step_log.tool_call {
-                                Some(tool_calls) => {
-                                    tool_calls.push(tool.clone());
-                                }
-                                None => {
-                                    step_log.tool_call = Some(vec![tool.clone()]);
-                                }
-                            }
                             info!(
                                 "Executing tool call: {} with arguments: {:?}",
                                 function_name, tool.function.arguments
@@ -675,17 +645,12 @@ impl<M: Model + Debug> Agent for FunctionCallingAgent<M> {
                                         function_name,
                                         observation.chars().take(30000).collect::<String>()
                                     ));
-                                    match &mut step_log.error {
-                                        Some(errors) => errors.push(None),
-                                        None => step_log.error = Some(vec![None]),
-                                    }
                                 }
                                 Err(e) => {
-                                    observations.push("".to_string());
-                                    match &mut step_log.error {
-                                        Some(errors) => errors.push(Some(AgentError::Execution(e.to_string()))),
-                                        None => step_log.error = Some(vec![Some(AgentError::Execution(e.to_string()))]),
-                                    }
+                                    observations.push(format!(
+                                        "Error from {} with arguments: {:?}: {}",
+                                        function_name, tool.function.arguments, e
+                                    ));
                                     info!("Error: {}", e);
                                 }
                             }
@@ -795,22 +760,13 @@ impl<M: Model + Debug> Agent for CodeAgent<M> {
                 )?;
 
                 let response = llm_output.get_response()?;
+                step_log.llm_output = Some(response.clone());
 
                 let code = match parse_code_blobs(&response) {
-                    Ok(code) => {
-                        step_log.llm_output = Some(response);
-                        code
-                    }
+                    Ok(code) => code,
                     Err(e) => {
-                        match &mut step_log.error {
-                            Some(errors) => {
-                                errors.push(Some(e.clone()));
-                            }
-                            None => {
-                                step_log.error = Some(vec![Some(e.clone())]);
-                            }
-                        }
-                        info!("Error: {}", response + "\n" + &e.clone().to_string());
+                        step_log.error = Some(e.clone());
+                        info!("Error: {}", response + "\n" + &e.to_string());
                         return Ok(None);
                     }
                 };
@@ -846,16 +802,7 @@ impl<M: Model + Debug> Agent for CodeAgent<M> {
                             return Ok(Some(answer));
                         }
                         _ => {
-                            match &mut step_log.error {
-                                Some(errors) => {
-                                    errors.push(Some(AgentError::Execution(e.to_string())));
-                                }
-                                None => {
-                                    step_log.error =
-                                        Some(vec![Some(AgentError::Execution(e.to_string()))]);
-                                    step_log.observations = Some(vec!["".to_string()]);
-                                }
-                            }
+                            step_log.error = Some(AgentError::Execution(e.to_string()));
                             info!("Error: {}", e);
                         }
                     },

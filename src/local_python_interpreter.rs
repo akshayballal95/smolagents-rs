@@ -74,8 +74,6 @@ pub fn get_base_python_tools() -> HashMap<&'static str, &'static str> {
     .collect()
 }
 
-
-
 impl From<PyErr> for InterpreterError {
     fn from(err: PyErr) -> Self {
         InterpreterError::RuntimeError(err.to_string())
@@ -1025,10 +1023,7 @@ impl LocalPythonInterpreter {
             state: HashMap::new(),
         }
     }
-    pub fn forward(
-        &mut self,
-        code: &str,
-    ) -> Result<(String, String), InterpreterError> {
+    pub fn forward(&mut self, code: &str) -> Result<(String, String), InterpreterError> {
         let ast = ast::Suite::parse(code, "<embedded>")
             .map_err(|e| InterpreterError::SyntaxError(e.to_string()))?;
         let state = &mut self.state;
@@ -1282,9 +1277,7 @@ for place in dinner_places:
         "#,
         );
         let mut local_python_interpreter = LocalPythonInterpreter::new(vec![]);
-        let (_, execution_logs) = local_python_interpreter
-            .forward(&code)
-            .unwrap();
+        let (_, execution_logs) = local_python_interpreter.forward(&code).unwrap();
         assert_eq!(execution_logs, "25 Best Restaurants in Berlin, By Local Foodies: https://www.timeout.com/berlin/restaurants/best-restaurants-in-berlin\nThe 38 Best Berlin Restaurants - Eater: https://www.eater.com/maps/best-restaurants-berlin\nTHE 10 BEST Restaurants in Berlin - Tripadvisor: https://www.tripadvisor.com/Restaurants-g187323-Berlin.html\n12 Unique Restaurants in Berlin: https://www.myglobalviewpoint.com/unique-restaurants-in-berlin/\nBerlin's best restaurants: 101 places to eat right now: https://www.the-berliner.com/food/best-restaurants-berlin-101-places-to-eat/");
 
         let code = textwrap::dedent(
@@ -1314,9 +1307,7 @@ for movie in movies:
         "#,
         );
         let mut local_python_interpreter = LocalPythonInterpreter::new(vec![]);
-        let (_, _) = local_python_interpreter
-            .forward(&code)
-            .unwrap();
+        let (_, _) = local_python_interpreter.forward(&code).unwrap();
 
         let code = textwrap::dedent(
             r#"
@@ -1426,13 +1417,9 @@ guidelines = (
         );
         let tools: Vec<Box<dyn AnyTool>> = vec![Box::new(VisitWebsiteTool::new())];
         let mut local_python_interpreter = LocalPythonInterpreter::new(tools);
-        let (_, logs) = local_python_interpreter
-            .forward(&code)
-            .unwrap();
+        let (_, logs) = local_python_interpreter.forward(&code).unwrap();
         println!("logs: {:?}", logs);
-        let (_, logs_2) = local_python_interpreter
-            .forward(&code_2)
-            .unwrap();
+        let (_, logs_2) = local_python_interpreter.forward(&code_2).unwrap();
         println!("logs_2: {:?}", logs_2);
     }
 }

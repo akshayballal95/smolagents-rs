@@ -1,5 +1,5 @@
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use schemars::JsonSchema;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use super::tool_traits::{Parameters, Tool};
 use anyhow::Result;

@@ -1,13 +1,12 @@
 //! This module contains the Google search tool.
 
-use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::base::BaseTool;
 use super::tool_traits::Tool;
 use anyhow::Result;
-
 
 #[derive(Deserialize, JsonSchema)]
 #[schemars(title = "GoogleSearchToolParams")]
@@ -136,8 +135,6 @@ impl Tool for GoogleSearchTool {
         Ok(self.forward(&query, filter_year.as_deref()))
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {

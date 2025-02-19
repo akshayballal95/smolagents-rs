@@ -1,12 +1,11 @@
 //! This module contains the final answer tool. The model uses this tool to provide a final answer to the problem.
 
-use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use super::base::BaseTool;
 use super::tool_traits::Tool;
 use anyhow::Result;
-
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(title = "FinalAnswerToolParams")]
@@ -45,8 +44,6 @@ impl Tool for FinalAnswerTool {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,8 +51,8 @@ mod tests {
     #[test]
     fn test_final_answer_tool() {
         let tool = FinalAnswerTool::new();
-    let arguments = FinalAnswerToolParams {
-        answer: "The answer is 42".to_string(),
+        let arguments = FinalAnswerToolParams {
+            answer: "The answer is 42".to_string(),
         };
         let result = tool.forward(arguments).unwrap();
         assert_eq!(result, "The answer is 42");
