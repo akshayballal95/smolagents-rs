@@ -607,8 +607,7 @@ impl<M: Model + Debug> Agent for FunctionCallingAgent<M> {
                             "stop".to_string(),
                             vec!["Observation:".to_string()],
                         )])),
-                    )
-                    .unwrap();
+                    )?;
 
                 let mut observations = Vec::new();
                 let tools = model_message.get_tools_used()?;
@@ -647,10 +646,7 @@ impl<M: Model + Debug> Agent for FunctionCallingAgent<M> {
                                     ));
                                 }
                                 Err(e) => {
-                                    observations.push(format!(
-                                        "Error from {} with arguments: {:?}: {}",
-                                        function_name, tool.function.arguments, e
-                                    ));
+                                    observations.push(e.to_string());
                                     info!("Error: {}", e);
                                 }
                             }

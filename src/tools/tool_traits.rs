@@ -9,6 +9,7 @@ use serde::Serialize;
 use serde_json::json;
 use std::fmt::Debug;
 
+use crate::errors::{AgentError, AgentExecutionError};
 use crate::models::openai::FunctionCall;
 
 /// A trait for parameters that can be used in a tool. This defines the arguments that can be passed to the tool.
@@ -77,18 +78,18 @@ pub fn get_json_schema(tool: &ToolInfo) -> serde_json::Value {
 }
 
 pub trait ToolGroup: Debug {
-    fn call(&self, arguments: &FunctionCall) -> Result<String>;
+    fn call(&self, arguments: &FunctionCall) -> Result<String, AgentExecutionError>;
     fn tool_info(&self) -> Vec<ToolInfo>;
 }
 
 impl ToolGroup for Vec<Box<dyn AnyTool>> {
-    fn call(&self, arguments: &FunctionCall) -> Result<String> {
+    fn call(&self, arguments: &FunctionCall) -> Result<String, AgentError> {
         let tool = self.iter().find(|tool| tool.name() == arguments.name);
         if let Some(tool) = tool {
             let p = arguments.arguments.clone();
             return tool.forward_json(p);
         }
-        Err(anyhow::anyhow!("Tool not found"))
+        Err(AgentError::Execution("Tool not found".to_string()))
     }
     fn tool_info(&self) -> Vec<ToolInfo> {
         self.iter().map(|tool| tool.tool_info()).collect()
@@ -98,7 +99,7 @@ impl ToolGroup for Vec<Box<dyn AnyTool>> {
 pub trait AnyTool: Debug {
     fn name(&self) -> &'static str;
     fn description(&self) -> &'static str;
-    fn forward_json(&self, json_args: serde_json::Value) -> Result<String>;
+    fn forward_json(&self, json_args: serde_json::Value) -> Result<String, AgentError>;
     fn tool_info(&self) -> ToolInfo;
     fn clone_box(&self) -> Box<dyn AnyTool>;
 }
@@ -112,9 +113,17 @@ impl<T: Tool + Clone + 'static> AnyTool for T {
         Tool::description(self)
     }
 
-    fn forward_json(&self, json_args: serde_json::Value) -> Result<String> {
-        let params = serde_json::from_value::<T::Params>(json_args)?;
-        Tool::forward(self, params)
+    fn forward_json(&self, json_args: serde_json::Value) -> Result<String, AgentError> {
+        let params = serde_json::from_value::<T::Params>(json_args.clone()).map_err(|e| {
+            AgentError::Parsing(format!(
+                "Error when executing tool with arguments: {:?}: {}. As a reminder, this tool's description is: {} and takes inputs: {}",
+                json_args,
+                e.to_string(),
+                self.description(),
+                json!(&self.tool_info().function.parameters.schema)["properties"].to_string()
+            ))
+        })?;
+        Tool::forward(self, params).map_err(|e| AgentError::Execution(e.to_string()))
     }
 
     fn tool_info(&self) -> ToolInfo {
