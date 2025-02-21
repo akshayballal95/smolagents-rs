@@ -131,6 +131,7 @@ fn main() -> Result<()> {
             OllamaModelBuilder::new()
                 .model_id(&args.model_id)
                 .ctx_length(8000)
+                .url(args.base_url.unwrap_or("http://localhost:11434".to_string()))
                 .build(),
         ),
     };

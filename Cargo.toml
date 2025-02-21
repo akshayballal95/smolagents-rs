@@ -34,7 +34,7 @@ path = "src/bin/main.rs"
 required-features = ["cli"]
 
 [features]
-default = []
+default = ["cli", "code-agent"]
 cli = ["dep:clap"]
 code-agent = ["dep:rustpython-parser", "dep:pyo3"]
 all = ["cli", "code-agent"]

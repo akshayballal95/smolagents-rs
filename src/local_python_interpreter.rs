@@ -3,7 +3,10 @@ use crate::tools::{AnyTool, ToolInfo};
 use anyhow::Result;
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyDict, PyModule, PyTuple};
-use rustpython_parser::ast::{bigint::{BigInt, Sign}, Constant};
+use rustpython_parser::ast::{
+    bigint::{BigInt, Sign},
+    Constant,
+};
 use serde_json::{self, json, Value};
 use std::collections::HashMap;
 
@@ -281,7 +284,6 @@ impl PythonToolFunction {
     }
 }
 
-
 fn setup_custom_tools(tools: &[Box<dyn AnyTool>]) -> HashMap<String, PythonToolFunction> {
     let mut tools_map = HashMap::new();
     for tool in tools {
@@ -308,7 +310,6 @@ fn setup_custom_tools(tools: &[Box<dyn AnyTool>]) -> HashMap<String, PythonToolF
     }
     tools_map
 }
-
 
 fn convert_bigint_to_i64(i: &BigInt) -> i64 {
     let i = i.to_u32_digits();
@@ -372,52 +373,50 @@ pub fn evaluate_python_code(
     let result = Python::with_gil(|py| -> PyResult<String> {
         let locals = state.clone().into_py_dict(py);
         let globals = PyDict::new(py);
-        
+
         // Add base Python tools to globals
         for (name, _) in static_tools {
             if let Ok(builtin) = py.eval(&format!("__builtins__.{}", name), None, None) {
                 globals.set_item(name, builtin)?;
             }
         }
-        
+
         // Add custom tools to globals
         for (name, tool) in custom_tools {
             globals.set_item(name.to_string(), tool.into_py(py))?;
         }
-        
+
         // Add math module functions that are in base_tools
         let math = PyModule::import(py, "math")?;
         globals.set_item("math", math)?;
-        
+
         // Setup StringIO for capturing output
         let io = PyModule::import(py, "io")?;
         let string_io = io.call_method0("StringIO")?;
         globals.set_item("stdout", string_io)?;
-        
+
         // Redirect stdout
         py.run("import sys; sys.stdout = stdout", Some(globals), None)?;
-        
+
         // Run the user code with restricted globals
         py.run(code, Some(globals), Some(locals))?;
-        
+
         // Get the output
         locals.set_item(
             "print_logs",
             string_io.call_method0("getvalue")?.extract::<String>()?,
         )?;
-        
+
         // Update state with new locals
         for key in locals.keys() {
             let value = locals.get_item(key).unwrap();
             state.insert(key.to_string(), value.into_py(py));
         }
-        
+
         Ok(state
             .get("print_logs")
-            .unwrap()
-            .extract::<String>(py)
-            .unwrap()
-            .to_string())
+            .and_then(|obj| obj.extract::<String>(py).ok())
+            .unwrap_or_default())
     });
 
     Ok(result?)
@@ -430,10 +429,13 @@ pub struct LocalPythonInterpreter {
 }
 
 impl LocalPythonInterpreter {
-    pub fn new(custom_tools: &[Box<dyn AnyTool>], static_tools: Option<HashMap<&'static str, &'static str>>) -> Self {
+    pub fn new(
+        custom_tools: &[Box<dyn AnyTool>],
+        static_tools: Option<HashMap<&'static str, &'static str>>,
+    ) -> Self {
         let custom_tools = custom_tools.iter().map(|tool| tool.clone_box()).collect();
         let static_tools = static_tools.unwrap_or_else(get_base_python_tools);
-    
+
         Self {
             static_tools,
             custom_tools,
@@ -441,7 +443,12 @@ impl LocalPythonInterpreter {
         }
     }
     pub fn forward(&mut self, code: &str) -> Result<(String, String), InterpreterError> {
-        let execution_logs = evaluate_python_code(code, &self.custom_tools, &self.static_tools, &mut self.state)?;
+        let execution_logs = evaluate_python_code(
+            code,
+            &self.custom_tools,
+            &self.static_tools,
+            &mut self.state,
+        )?;
 
         Ok(("".to_string(), execution_logs.to_string()))
     }
@@ -458,7 +465,6 @@ mod tests {
         let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
         let (_, execution_logs) = interpreter.forward(&code).unwrap();
         assert_eq!(execution_logs, "Hello, world!\n");
-        
     }
 
     #[test]
