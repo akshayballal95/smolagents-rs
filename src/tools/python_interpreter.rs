@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::base::BaseTool;
 use super::tool_traits::Tool;
-use crate::local_python_interpreter::evaluate_python_code;
+use crate::local_python_interpreter::{evaluate_python_code, LocalPythonInterpreter};
 use anyhow::Result;
 
 #[derive(Deserialize, JsonSchema)]
@@ -45,9 +45,10 @@ impl Tool for PythonInterpreterTool {
         self.tool.description
     }
     fn forward(&self, arguments: PythonInterpreterToolParams) -> Result<String> {
-        let result = evaluate_python_code(&arguments.code, vec![], &mut HashMap::new());
+        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let result = interpreter.forward(&arguments.code);
         match result {
-            Ok(result) => Ok(format!("Evaluation Result: {}", result)),
+            Ok(result) => Ok(format!("Evaluation Result: {}", result.1)),
             Err(e) => Err(anyhow::anyhow!("Error evaluating code: {}", e)),
         }
     }

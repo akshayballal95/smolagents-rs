@@ -694,13 +694,7 @@ impl<M: Model> CodeAgent<M> {
             description,
             max_steps,
         )?;
-        let local_python_interpreter = LocalPythonInterpreter::new(
-            base_agent
-                .tools
-                .iter()
-                .map(|tool| tool.clone_box())
-                .collect(),
-        );
+        let local_python_interpreter = LocalPythonInterpreter::new(&base_agent.tools, None);
 
         Ok(Self {
             base_agent,
