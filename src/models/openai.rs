@@ -59,26 +59,6 @@ where
     Ok(value)
 }
 
-impl FunctionCall {
-    pub fn get_arguments(&self) -> Result<HashMap<String, String>> {
-        // First try to parse as a HashMap directly
-        if let Ok(map) = serde_json::from_value(self.arguments.clone()) {
-            return Ok(map);
-        }
-
-        // If that fails, try to parse as a string and then parse that string as JSON
-        if let Value::String(arg_str) = &self.arguments {
-            if let Ok(parsed) = serde_json::from_str(arg_str) {
-                return Ok(parsed);
-            }
-        }
-
-        // If all parsing attempts fail, return the original error
-        Err(anyhow::anyhow!(
-            "Failed to parse arguments as HashMap or JSON string"
-        ))
-    }
-}
 
 impl ModelResponse for OpenAIResponse {
     fn get_response(&self) -> Result<String, AgentError> {

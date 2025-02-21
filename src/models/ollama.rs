@@ -124,7 +124,7 @@ impl Model for OllamaModel {
                 "num_ctx": self.ctx_length,
             }),
             "tools": tools,
-            "max_tokens": max_tokens.unwrap_or(1500),
+            "max_tokens": max_tokens.unwrap_or(4096),
         });
         if let Some(args) = args {
             for (key, value) in args {
@@ -140,7 +140,17 @@ impl Model for OllamaModel {
             .map_err(|e| {
                 AgentError::Generation(format!("Failed to get response from Ollama: {}", e))
             })?;
-        let output = response.json::<OllamaResponse>().unwrap();
+        let status = response.status();
+        if status.is_client_error() {
+            let error_message = response.text().unwrap_or_default();
+            return Err(AgentError::Generation(format!(
+                "Failed to get response from Ollama: {}",
+                error_message
+            )));
+        }
+        let output = response.json::<OllamaResponse>().map_err(|e| {
+            AgentError::Generation(format!("Failed to parse response from Ollama: {}", e))
+        })?;
         Ok(Box::new(output))
     }
 }

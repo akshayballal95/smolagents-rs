@@ -11,7 +11,8 @@ use smolagents_rs::models::ollama::{OllamaModel, OllamaModelBuilder};
 use smolagents_rs::models::openai::OpenAIServerModel;
 use smolagents_rs::models::types::Message;
 use smolagents_rs::tools::{
-    AnyTool, DuckDuckGoSearchTool, GoogleSearchTool, PythonInterpreterTool, ToolInfo, VisitWebsiteTool
+    AnyTool, DuckDuckGoSearchTool, GoogleSearchTool, PythonInterpreterTool, ToolInfo,
+    VisitWebsiteTool,
 };
 use std::fs::File;
 
@@ -113,6 +114,10 @@ struct Args {
     /// Base URL for the API
     #[arg(short, long)]
     base_url: Option<String>,
+
+    /// Maximum number of steps to take
+    #[arg(long, default_value = "10")]
+    max_steps: Option<usize>,
 }
 
 fn create_tool(tool_type: &ToolType) -> Box<dyn AnyTool> {
@@ -140,7 +145,8 @@ fn main() -> Result<()> {
         ModelType::Ollama => ModelWrapper::Ollama(
             OllamaModelBuilder::new()
                 .model_id(&args.model_id)
-                .ctx_length(8000)
+                .ctx_length(4000)
+                .temperature(Some(0.0))
                 .build(),
         ),
     };
@@ -153,7 +159,7 @@ fn main() -> Result<()> {
             None,
             None,
             Some("CLI Agent"),
-            None,
+            args.max_steps,
         )?),
         AgentType::Code => AgentWrapper::Code(CodeAgent::new(
             model,

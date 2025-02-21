@@ -104,6 +104,10 @@ struct Args {
     /// Base URL for the API
     #[arg(short, long)]
     base_url: Option<String>,
+
+    /// Maximum number of steps to take
+    #[arg(long, default_value = "10")]
+    max_steps: Option<usize>,
 }
 
 fn create_tool(tool_type: &ToolType) -> Box<dyn AnyTool> {
@@ -144,7 +148,7 @@ fn main() -> Result<()> {
             None,
             None,
             Some("CLI Agent"),
-            None,
+            args.max_steps,
         )?),
         AgentType::Code => AgentWrapper::Code(CodeAgent::new(
             model,
@@ -152,7 +156,7 @@ fn main() -> Result<()> {
             None,
             None,
             Some("CLI Agent"),
-            None,
+            args.max_steps,
         )?),
     };
 

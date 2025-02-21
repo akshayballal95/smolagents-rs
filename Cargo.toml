@@ -1,6 +1,6 @@
 [package]
 name = "smolagents-rs"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "A rust port of the the HuggingFace smolagents library. Build LLM agents with tools and code execution."
 license = "Apache-2.0"
@@ -31,7 +31,7 @@ textwrap = "0.16.0"
 [[bin]]
 name = "smolagents-rs"
 path = "src/bin/main.rs"
-required-features = ["cli"]
+required-features = ["cli", "code-agent"]
 
 [features]
 default = []
