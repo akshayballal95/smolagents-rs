@@ -1,13 +1,10 @@
 //! This module contains the Python interpreter tool. The model uses this tool to evaluate python code.
-
-use std::collections::HashMap;
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::base::BaseTool;
 use super::tool_traits::Tool;
-use crate::local_python_interpreter::{evaluate_python_code, LocalPythonInterpreter};
+use crate::local_python_interpreter::LocalPythonInterpreter;
 use anyhow::Result;
 
 #[derive(Deserialize, JsonSchema)]
@@ -31,7 +28,7 @@ impl PythonInterpreterTool {
         PythonInterpreterTool {
             tool: BaseTool {
                 name: "python_interpreter",
-                description:  "This is a tool that evaluates python code. It can be used to perform calculations."
+                description:  "This is a tool that evaluates python code. It can be used to perform calculations. Make sure to print the result using print()."
             }}
     }
 }
@@ -48,8 +45,16 @@ impl Tool for PythonInterpreterTool {
         let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
         let result = interpreter.forward(&arguments.code);
         match result {
-            Ok(result) => Ok(format!("Evaluation Result: {}", result.1)),
-            Err(e) => Err(anyhow::anyhow!("Error evaluating code: {}", e)),
+            Ok(result) => {
+                if result.1.is_empty() {
+                    Ok(format!("No Results. Make sure to print the result using print()."))
+                } else {
+                    Ok(format!("Evaluation Result: {}", result.1))
+                }
+            }
+            Err(e) => {
+                Err(anyhow::anyhow!("Error evaluating code: {}", e))
+            }
         }
     }
 }

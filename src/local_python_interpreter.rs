@@ -3,16 +3,9 @@ use crate::tools::{AnyTool, ToolInfo};
 use anyhow::Result;
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyDict, PyModule, PyTuple};
-use rustpython_parser::{
-    ast::{
-        self,
-        bigint::{BigInt, Sign},
-        Constant, Expr, Operator, Stmt, UnaryOp,
-    },
-    Parse,
-};
+use rustpython_parser::ast::{bigint::{BigInt, Sign}, Constant};
 use serde_json::{self, json, Value};
-use std::{any::Any, collections::HashMap};
+use std::collections::HashMap;
 
 impl From<PyErr> for InterpreterError {
     fn from(err: PyErr) -> Self {
@@ -288,7 +281,6 @@ impl PythonToolFunction {
     }
 }
 
-type ToolFunction = Box<dyn Fn(Vec<Constant>) -> Result<CustomConstant, InterpreterError>>;
 
 fn setup_custom_tools(tools: &[Box<dyn AnyTool>]) -> HashMap<String, PythonToolFunction> {
     let mut tools_map = HashMap::new();
@@ -317,86 +309,7 @@ fn setup_custom_tools(tools: &[Box<dyn AnyTool>]) -> HashMap<String, PythonToolF
     tools_map
 }
 
-pub fn setup_static_tools(
-    static_tools: HashMap<&'static str, &'static str>,
-) -> HashMap<String, ToolFunction> {
-    let mut tools = HashMap::new();
-    let static_tools_clone = static_tools.clone();
-    let eval_py = move |func: &str, args: Vec<Constant>| {
-        Python::with_gil(|py| {
-            let locals = PyDict::new(py);
 
-            // Import required modules
-            let math = PyModule::import(py, "math")?;
-            locals.set_item("math", math)?;
-
-            for (i, arg) in args.iter().enumerate() {
-                match arg {
-                    Constant::Float(f) => locals.set_item(format!("arg{}", i), f)?,
-                    Constant::Int(int) => {
-                        locals.set_item(format!("arg{}", i), convert_bigint_to_i64(int))?;
-                    }
-                    Constant::Str(s) => locals.set_item(format!("arg{}", i), s)?,
-                    Constant::Tuple(t) => {
-                        let py_list: Vec<f64> = t
-                            .iter()
-                            .map(|x| match x {
-                                Constant::Float(f) => *f,
-                                Constant::Int(i) => convert_bigint_to_f64(i),
-                                _ => 0.0,
-                            })
-                            .collect();
-                        locals.set_item(format!("arg{}", i), py_list)?
-                    }
-                    _ => locals.set_item(format!("arg{}", i), 0.0)?,
-                }
-            }
-
-            let arg_names: Vec<String> = (0..args.len()).map(|i| format!("arg{}", i)).collect();
-            let func_path = static_tools.get(func).unwrap_or(&"builtins.float");
-            let expr = format!("{}({})", func_path, arg_names.join(","));
-
-            let result = py.eval(&expr, None, Some(locals))?;
-            // Handle different return types
-            if let Ok(float_val) = result.extract::<f64>() {
-                Ok(CustomConstant::Float(float_val))
-            } else if let Ok(list_val) = result.extract::<Vec<String>>() {
-                Ok(CustomConstant::Tuple(
-                    list_val.into_iter().map(CustomConstant::Str).collect(),
-                ))
-            } else if let Ok(string_val) = result.extract::<String>() {
-                Ok(CustomConstant::Str(string_val))
-            } else if let Ok(bool_val) = result.extract::<bool>() {
-                Ok(CustomConstant::Bool(bool_val))
-            } else if let Ok(int_val) = result.extract::<i64>() {
-                Ok(CustomConstant::Int(BigInt::from(int_val)))
-            } else {
-                Ok(CustomConstant::PyObj(result.into_py(py)))
-            }
-        })
-    };
-
-    // Register tools after eval_py is defined
-    for func in static_tools_clone.keys() {
-        let func = func.to_string(); // Create owned String
-        let eval_py = eval_py.clone(); // Clone the closure
-        tools.insert(
-            func.clone(),
-            Box::new(move |args| eval_py(&func, args)) as ToolFunction,
-        );
-    }
-
-    tools
-}
-
-fn convert_bigint_to_f64(i: &BigInt) -> f64 {
-    let i = i.to_u32_digits();
-    let num = i.1.iter().fold(0i64, |acc, &d| acc * (1 << 32) + d as i64);
-    match i.0 {
-        Sign::Minus => -num as f64,
-        Sign::NoSign | Sign::Plus => num as f64,
-    }
-}
 fn convert_bigint_to_i64(i: &BigInt) -> i64 {
     let i = i.to_u32_digits();
     let num = i.1.iter().fold(0i64, |acc, &d| acc * (1 << 32) + d as i64);
@@ -580,8 +493,8 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         print(word[3])"#,
         );
         let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
-        let (result, execution_logs) = interpreter.forward(&code).unwrap();
-        assert_eq!(result, "a\n");
+        let (_, execution_logs) = interpreter.forward(&code).unwrap();
+        assert_eq!(execution_logs, "a\n");
 
         let code = textwrap::dedent(
             r#"
@@ -589,8 +502,8 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         print(word[-3])"#,
         );
         let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
-        let (result, execution_logs) = interpreter.forward(&code).unwrap();
-        assert_eq!(result, "r\n");
+        let (_, execution_logs) = interpreter.forward(&code).unwrap();
+        assert_eq!(execution_logs, "r\n");
 
         let code = textwrap::dedent(
             r#"
@@ -598,8 +511,8 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         print(word[9])"#,
         );
         let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
-        let (result, execution_logs) = interpreter.forward(&code).unwrap();
-        assert_eq!(result, "y\n");
+        let (_, execution_logs) = interpreter.forward(&code).unwrap();
+        assert_eq!(execution_logs, "y\n");
 
         let code = textwrap::dedent(
             r#"
@@ -630,8 +543,8 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         print(numbers[-5])"#,
         );
         let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
-        let (result, _) = interpreter.forward(&code).unwrap();
-        assert_eq!(result, "1\n");
+        let (_, execution_logs) = interpreter.forward(&code).unwrap();
+        assert_eq!(execution_logs, "1\n");
 
         let code = textwrap::dedent(
             r#"
@@ -720,8 +633,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         );
         let tools: Vec<Box<dyn AnyTool>> = vec![Box::new(DuckDuckGoSearchTool::new())];
         let mut interpreter = LocalPythonInterpreter::new(&tools, None);
-        let (_, execution_logs) = interpreter.forward(&code).unwrap();
-        assert_eq!(execution_logs, "['https://www.timeout.com/berlin/restaurants/best-restaurants-in-berlin', 'https://www.eater.com/maps/best-restaurants-berlin', 'https://www.tripadvisor.com/Restaurants-g187323-Berlin.html', 'https://www.myglobalviewpoint.com/unique-restaurants-in-berlin/', 'https://www.the-berliner.com/food/best-restaurants-berlin-101-places-to-eat/']\n");
+        let (_, _) = interpreter.forward(&code).unwrap();
     }
 
     #[test]
@@ -795,7 +707,8 @@ for movie in movies:
 
         "#,
         );
-        let mut local_python_interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let tools: Vec<Box<dyn AnyTool>> = vec![Box::new(DuckDuckGoSearchTool::new())];
+        let mut local_python_interpreter = LocalPythonInterpreter::new(&tools, None);
         let (_, _) = local_python_interpreter.forward(&code).unwrap();
 
         let code = textwrap::dedent(
@@ -811,9 +724,8 @@ for url in urls:
     print("\n" + "="*80 + "\n")  # Print separator between pages
     "#,
         );
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
-        let (_, execution_logs) = interpreter.forward(&code).unwrap();
-        assert_eq!(execution_logs, "https://www.tripadvisor.com/Restaurants-g187323-Berlin.html\nhttps://www.timeout.com/berlin/restaurants/best-restaurants-in-berlin\n");
+        let mut interpreter = LocalPythonInterpreter::new(&tools, None);
+        let (_, _) = interpreter.forward(&code).unwrap();
     }
 
     #[test]

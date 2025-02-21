@@ -11,7 +11,7 @@ use smolagents_rs::models::ollama::{OllamaModel, OllamaModelBuilder};
 use smolagents_rs::models::openai::OpenAIServerModel;
 use smolagents_rs::models::types::Message;
 use smolagents_rs::tools::{
-    AnyTool, DuckDuckGoSearchTool, GoogleSearchTool, ToolInfo, VisitWebsiteTool,
+    AnyTool, DuckDuckGoSearchTool, GoogleSearchTool, PythonInterpreterTool, ToolInfo, VisitWebsiteTool
 };
 use std::fs::File;
 
@@ -26,6 +26,7 @@ enum ToolType {
     DuckDuckGo,
     VisitWebsite,
     GoogleSearchTool,
+    PythonInterpreter,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -119,6 +120,7 @@ fn create_tool(tool_type: &ToolType) -> Box<dyn AnyTool> {
         ToolType::DuckDuckGo => Box::new(DuckDuckGoSearchTool::new()),
         ToolType::VisitWebsite => Box::new(VisitWebsiteTool::new()),
         ToolType::GoogleSearchTool => Box::new(GoogleSearchTool::new(None)),
+        ToolType::PythonInterpreter => Box::new(PythonInterpreterTool::new()),
     }
 }
 

@@ -655,10 +655,17 @@ impl<M: Model + Debug> Agent for FunctionCallingAgent<M> {
                 }
                 step_log.observations = Some(observations);
 
-                info!(
-                    "Observation: {} \n ....This content has been truncated due to the 30000 character limit.....",
-                    step_log.observations.clone().unwrap_or_default().join("\n").trim().chars().take(30000).collect::<String>()
-                );
+                if step_log.observations.clone().unwrap_or_default().join("\n").trim().len() > 30000 {
+                    info!(
+                        "Observation: {} \n ....This content has been truncated due to the 30000 character limit.....",
+                        step_log.observations.clone().unwrap_or_default().join("\n").trim().chars().take(30000).collect::<String>()
+                    );
+                } else {
+                    info!(
+                        "Observation: {}",
+                        step_log.observations.clone().unwrap_or_default().join("\n")
+                    );
+                }
                 Ok(None)
             }
             _ => {
@@ -774,14 +781,17 @@ impl<M: Model + Debug> Agent for CodeAgent<M> {
                 match result {
                     Ok(result) => {
                         let (result, execution_logs) = result;
-                        let mut observation = if !execution_logs.is_empty() {
-                            format!("Execution logs: {}", execution_logs)
-                        } else {
-                            format!("Observation: {}", result)
+                        let mut observation = match (execution_logs.is_empty(), result.is_empty()) {
+                            (false, false) => format!("Execution logs: {}\nResult: {}", execution_logs, result),
+                            (false, true) => format!("Execution logs: {}", execution_logs),
+                            (true, false) => format!("Result: {}", result),
+                            (true, true) => String::from("No output or logs generated")
                         };
                         if observation.len() > 30000 {
                             observation = observation.chars().take(30000).collect::<String>();
                             observation = format!("{} \n....This content has been truncated due to the 30000 character limit.....", observation);
+                        } else {
+                            observation = format!("Observation: {}", observation);
                         }
                         info!("Observation: {}", observation);
 
