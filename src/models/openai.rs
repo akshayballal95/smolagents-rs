@@ -38,27 +38,45 @@ pub struct ToolCall {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FunctionCall {
     pub name: String,
-    #[serde(deserialize_with = "deserialize_arguments")]
+    #[serde(deserialize_with = "deserialize_arguments", serialize_with = "serialize_arguments")]
     pub arguments: Value,
 }
 
-// Add this function to handle argument deserialization
+// Update the serialize_arguments function to handle JSON objects properly
+fn serialize_arguments<S>(value: &Value, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    // If it's already a string, return as is
+    if let Value::String(s) = value {
+        serializer.serialize_str(s)
+    } else {
+        // For objects and other types, serialize to a JSON string
+        match serde_json::to_string(value) {
+            Ok(json_str) => serializer.serialize_str(&json_str),
+            Err(e) => Err(serde::ser::Error::custom(format!("JSON serialization error: {}", e))),
+        }
+    }
+}
+
+// Update the deserialize_arguments function to be more robust
 fn deserialize_arguments<'de, D>(deserializer: D) -> Result<Value, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let value = Value::deserialize(deserializer)?;
 
-    // If it's a string, try to parse it as JSON
-    if let Value::String(s) = &value {
-        if let Ok(parsed) = serde_json::from_str(s) {
-            return Ok(parsed);
+    match &value {
+        Value::String(s) => {
+            // Try to parse the string as JSON
+            match serde_json::from_str(s) {
+                Ok(parsed) => Ok(parsed),
+                Err(_) => Ok(value), // If parsing fails, return the original string value
+            }
         }
+        _ => Ok(value), // If it's not a string, return as is
     }
-
-    Ok(value)
 }
-
 
 impl ModelResponse for OpenAIResponse {
     fn get_response(&self) -> Result<String, AgentError> {
@@ -131,15 +149,6 @@ impl Model for OpenAIServerModel {
     ) -> Result<Box<dyn ModelResponse>, AgentError> {
         let max_tokens = max_tokens.unwrap_or(1500);
 
-        let messages = messages
-            .iter()
-            .map(|message| {
-                json!({
-                    "role": message.role,
-                    "content": message.content
-                })
-            })
-            .collect::<Vec<_>>();
         let mut body = json!({
             "model": self.model_id,
             "messages": messages,

@@ -8,7 +8,7 @@ use anyhow::Result;
 
 use super::{
     model_traits::{Model, ModelResponse},
-    openai::ToolCall,
+    openai::{OpenAIResponse, ToolCall},
     types::{Message, MessageRole},
 };
 
@@ -41,6 +41,7 @@ pub struct OllamaModel {
     url: String,
     client: reqwest::blocking::Client,
     ctx_length: usize,
+    max_tokens: usize,
 }
 
 #[derive(Default)]
@@ -50,6 +51,7 @@ pub struct OllamaModelBuilder {
     client: Option<reqwest::blocking::Client>,
     url: Option<String>,
     ctx_length: Option<usize>,
+    max_tokens: Option<usize>,
 }
 
 impl OllamaModelBuilder {
@@ -61,6 +63,7 @@ impl OllamaModelBuilder {
             client: Some(client),
             url: Some("http://localhost:11434".to_string()),
             ctx_length: Some(2048),
+            max_tokens: Some(1500),
         }
     }
 
@@ -84,6 +87,11 @@ impl OllamaModelBuilder {
         self
     }
 
+    pub fn max_tokens(mut self, max_tokens: usize) -> Self {
+        self.max_tokens = Some(max_tokens);
+        self
+    }
+
     pub fn build(self) -> OllamaModel {
         OllamaModel {
             model_id: self.model_id,
@@ -91,6 +99,7 @@ impl OllamaModelBuilder {
             url: self.url.unwrap_or("http://localhost:11434".to_string()),
             client: self.client.unwrap_or_default(),
             ctx_length: self.ctx_length.unwrap_or(2048),
+            max_tokens: self.max_tokens.unwrap_or(1500),
         }
     }
 }
@@ -103,15 +112,6 @@ impl Model for OllamaModel {
         max_tokens: Option<usize>,
         args: Option<HashMap<String, Vec<String>>>,
     ) -> Result<Box<dyn ModelResponse>, AgentError> {
-        let messages = messages
-            .iter()
-            .map(|message| {
-                json!({
-                    "role": message.role,
-                    "content": message.content
-                })
-            })
-            .collect::<Vec<_>>();
 
         let tools = json!(tools_to_call_from);
 
@@ -124,7 +124,7 @@ impl Model for OllamaModel {
                 "num_ctx": self.ctx_length,
             }),
             "tools": tools,
-            "max_tokens": max_tokens.unwrap_or(4096),
+            "max_tokens": max_tokens.unwrap_or(self.max_tokens),
         });
         if let Some(args) = args {
             for (key, value) in args {
@@ -134,7 +134,7 @@ impl Model for OllamaModel {
 
         let response = self
             .client
-            .post(format!("{}/api/chat", self.url))
+            .post(format!("{}/v1/chat/completions", self.url))
             .json(&body)
             .send()
             .map_err(|e| {
@@ -148,7 +148,7 @@ impl Model for OllamaModel {
                 error_message
             )));
         }
-        let output = response.json::<OllamaResponse>().map_err(|e| {
+        let output = response.json::<OpenAIResponse>().map_err(|e| {
             AgentError::Generation(format!("Failed to parse response from Ollama: {}", e))
         })?;
         Ok(Box::new(output))

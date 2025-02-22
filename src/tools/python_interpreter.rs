@@ -42,12 +42,12 @@ impl Tool for PythonInterpreterTool {
         self.tool.description
     }
     fn forward(&self, arguments: PythonInterpreterToolParams) -> Result<String> {
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut interpreter = LocalPythonInterpreter::new(&[], None);
         let result = interpreter.forward(&arguments.code);
         match result {
             Ok(result) => {
                 if result.1.is_empty() {
-                    Ok(format!("No Results. Make sure to print the result using print()."))
+                    Ok("No Results. Make sure to print the result using print().".to_string())
                 } else {
                     Ok(format!("Evaluation Result: {}", result.1))
                 }

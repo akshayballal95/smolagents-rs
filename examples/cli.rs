@@ -145,8 +145,8 @@ fn main() -> Result<()> {
         ModelType::Ollama => ModelWrapper::Ollama(
             OllamaModelBuilder::new()
                 .model_id(&args.model_id)
-                .ctx_length(4000)
-                .temperature(Some(0.0))
+                .ctx_length(8000)
+                .temperature(Some(0.5))
                 .build(),
         ),
     };

@@ -375,7 +375,7 @@ pub fn evaluate_python_code(
         let globals = PyDict::new(py);
 
         // Add base Python tools to globals
-        for (name, _) in static_tools {
+        for name in static_tools.keys() {
             if let Ok(builtin) = py.eval(&format!("__builtins__.{}", name), None, None) {
                 globals.set_item(name, builtin)?;
             }
