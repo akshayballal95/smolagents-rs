@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use serde::Deserialize;
 use serde_json::json;
 
 use crate::{errors::AgentError, tools::ToolInfo};
@@ -8,31 +7,9 @@ use anyhow::Result;
 
 use super::{
     model_traits::{Model, ModelResponse},
-    openai::{OpenAIResponse, ToolCall},
-    types::{Message, MessageRole},
+    openai::OpenAIResponse,
+    types::Message,
 };
-
-#[derive(Debug, Deserialize)]
-pub struct OllamaResponse {
-    pub message: AssistantMessage,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AssistantMessage {
-    pub role: MessageRole,
-    pub content: Option<String>,
-    pub tool_calls: Option<Vec<ToolCall>>,
-}
-
-impl ModelResponse for OllamaResponse {
-    fn get_response(&self) -> Result<String, AgentError> {
-        Ok(self.message.content.clone().unwrap_or_default())
-    }
-
-    fn get_tools_used(&self) -> Result<Vec<ToolCall>, AgentError> {
-        Ok(self.message.tool_calls.clone().unwrap_or_default())
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct OllamaModel {
