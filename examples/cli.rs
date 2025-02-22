@@ -146,7 +146,8 @@ fn main() -> Result<()> {
             OllamaModelBuilder::new()
                 .model_id(&args.model_id)
                 .ctx_length(8000)
-                .temperature(Some(0.5))
+                .temperature(Some(0.0))
+                .with_native_tools(true)
                 .build(),
         ),
     };

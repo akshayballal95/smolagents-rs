@@ -49,7 +49,7 @@ pub struct ToolFunctionInfo {
 
 impl ToolInfo {
     pub fn new<P: Parameters, T: AnyTool>(tool: &T) -> Self {
-        let mut settings = SchemaSettings::draft07();
+        let mut settings = SchemaSettings::openapi3();
         settings.inline_subschemas = true;
         let generator = settings.into_generator();
 

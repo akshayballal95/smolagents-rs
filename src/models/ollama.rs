@@ -19,6 +19,7 @@ pub struct OllamaModel {
     client: reqwest::blocking::Client,
     ctx_length: usize,
     max_tokens: usize,
+    native_tools: bool,
 }
 
 #[derive(Default)]
@@ -29,6 +30,7 @@ pub struct OllamaModelBuilder {
     url: Option<String>,
     ctx_length: Option<usize>,
     max_tokens: Option<usize>,
+    native_tools: Option<bool>,
 }
 
 impl OllamaModelBuilder {
@@ -41,6 +43,7 @@ impl OllamaModelBuilder {
             url: Some("http://localhost:11434".to_string()),
             ctx_length: Some(2048),
             max_tokens: Some(1500),
+            native_tools: Some(false),
         }
     }
 
@@ -69,6 +72,16 @@ impl OllamaModelBuilder {
         self
     }
 
+    /// Whether to use native tools. If using native tools, make sure to either give simple system prompts
+    /// without any mention of tools or it could result in unexpected behavior with some models like qwen2.5.
+    /// The default system prompt is Tool Calling System Prompt, which provides a way to call tools. Some models
+    /// like qwen2.5 do not behave well with this when native tools are used. By default, native tools are not used.
+    /// In this case, the tool call is parsed from the response and the tool call is made to the model.
+    pub fn with_native_tools(mut self, native_tools: bool) -> Self {
+        self.native_tools = Some(native_tools);
+        self
+    }
+
     pub fn build(self) -> OllamaModel {
         OllamaModel {
             model_id: self.model_id,
@@ -77,6 +90,7 @@ impl OllamaModelBuilder {
             client: self.client.unwrap_or_default(),
             ctx_length: self.ctx_length.unwrap_or(2048),
             max_tokens: self.max_tokens.unwrap_or(1500),
+            native_tools: self.native_tools.unwrap_or(false),
         }
     }
 }
@@ -89,7 +103,6 @@ impl Model for OllamaModel {
         max_tokens: Option<usize>,
         args: Option<HashMap<String, Vec<String>>>,
     ) -> Result<Box<dyn ModelResponse>, AgentError> {
-
         let tools = json!(tools_to_call_from);
 
         let mut body = json!({
@@ -100,7 +113,6 @@ impl Model for OllamaModel {
             "options": json!({
                 "num_ctx": self.ctx_length,
             }),
-            "tools": tools,
             "max_tokens": max_tokens.unwrap_or(self.max_tokens),
         });
         if let Some(args) = args {
@@ -108,10 +120,14 @@ impl Model for OllamaModel {
                 body["options"][key] = json!(value);
             }
         }
+        if self.native_tools {
+            body["tools"] = tools;
+        }
 
         let response = self
             .client
             .post(format!("{}/v1/chat/completions", self.url))
+            .header("Content-Type", "application/json")
             .json(&body)
             .send()
             .map_err(|e| {

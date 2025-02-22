@@ -643,6 +643,7 @@ impl<M: Model + Debug> Agent for FunctionCallingAgent<M> {
                         }
                     }
                     if tools.is_empty() {
+                        self.base_agent.write_inner_memory_from_logs(None)?;
                         return Ok(Some(response));
                     }
                 }
@@ -657,7 +658,6 @@ impl<M: Model + Debug> Agent for FunctionCallingAgent<M> {
                             "final_answer" => {
                                 info!("Executing tool call: {}", function_name);
                                 let answer = self.base_agent.tools.call(&tool.function)?;
-                                self.base_agent.write_inner_memory_from_logs(None)?;
                                 return Ok(Some(answer));
                             }
                             _ => {
@@ -897,7 +897,6 @@ fn extract_action_json(text: &str) -> Option<String> {
         // Trim whitespace and find the first '{' and last '}'
         let start = action_part.find('{');
         let end = action_part.rfind('}');
-
         if let (Some(start_idx), Some(end_idx)) = (start, end) {
             return Some(action_part[start_idx..=end_idx].to_string());
         }
@@ -915,3 +914,15 @@ fn parse_response(response: &str) -> Result<serde_json::Value, AgentError> {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_response() {
+        let response = "Action:\n{\n  \"tool_name\": \"duckduckgo_search\",\n  \"tool_arguments\": {\"query\": \"how to make a small water rocket\"}\n}";
+        let _action = parse_response(response).unwrap();
+    }
+}
+
