@@ -23,3 +23,5 @@ Cargo.lock
 
 # VSCode
 .vscode/
+
+logs.txt

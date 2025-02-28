@@ -1,4 +1,4 @@
-use smolagents_rs::agents::{Agent, FunctionCallingAgent};
+use smolagents_rs::agent::{Agent, FunctionCallingAgent};
 use smolagents_rs::models::openai::OpenAIServerModel;
 use smolagents_rs::tools::{AnyTool, DuckDuckGoSearchTool, VisitWebsiteTool};
 
