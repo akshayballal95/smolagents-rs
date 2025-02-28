@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
@@ -19,6 +20,7 @@ pub struct BaseTool {
     pub description: &'static str,
 }
 
+#[async_trait]
 impl Tool for BaseTool {
     type Params = serde_json::Value;
     fn name(&self) -> &'static str {
@@ -28,7 +30,7 @@ impl Tool for BaseTool {
     fn description(&self) -> &'static str {
         self.description
     }
-    fn forward(&self, _arguments: serde_json::Value) -> Result<String> {
+    async fn forward(&self, _arguments: serde_json::Value) -> Result<String> {
         Ok("Not implemented".to_string())
     }
 }

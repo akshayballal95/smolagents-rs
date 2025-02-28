@@ -1,5 +1,6 @@
 //! This module contains the final answer tool. The model uses this tool to provide a final answer to the problem.
 
+use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +31,7 @@ impl FinalAnswerTool {
     }
 }
 
+#[async_trait]
 impl Tool for FinalAnswerTool {
     type Params = FinalAnswerToolParams;
     fn name(&self) -> &'static str {
@@ -39,7 +41,7 @@ impl Tool for FinalAnswerTool {
         self.tool.description
     }
 
-    fn forward(&self, arguments: FinalAnswerToolParams) -> Result<String> {
+    async fn forward(&self, arguments: FinalAnswerToolParams) -> Result<String> {
         Ok(arguments.answer)
     }
 }
@@ -48,13 +50,13 @@ impl Tool for FinalAnswerTool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_final_answer_tool() {
+    #[tokio::test]
+    async fn test_final_answer_tool() {
         let tool = FinalAnswerTool::new();
         let arguments = FinalAnswerToolParams {
             answer: "The answer is 42".to_string(),
         };
-        let result = tool.forward(arguments).unwrap();
+        let result = tool.forward(arguments).await.unwrap();
         assert_eq!(result, "The answer is 42");
     }
 }

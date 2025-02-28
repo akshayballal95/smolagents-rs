@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
 use serde_json;
 use smolagents_rs::agent::Step;
@@ -11,7 +12,7 @@ use smolagents_rs::models::ollama::{OllamaModel, OllamaModelBuilder};
 use smolagents_rs::models::openai::OpenAIServerModel;
 use smolagents_rs::models::types::Message;
 use smolagents_rs::tools::{
-    AnyTool, DuckDuckGoSearchTool, GoogleSearchTool, PythonInterpreterTool, ToolInfo,
+    AnyTool, AsyncTool, DuckDuckGoSearchTool, GoogleSearchTool, PythonInterpreterTool, ToolInfo,
     VisitWebsiteTool,
 };
 use std::fs::File;
@@ -48,10 +49,10 @@ enum AgentWrapper {
 }
 
 impl AgentWrapper {
-    fn run(&mut self, task: &str, stream: bool, reset: bool) -> Result<String> {
+    async fn run(&mut self, task: &str, stream: bool, reset: bool) -> Result<String> {
         match self {
-            AgentWrapper::FunctionCalling(agent) => agent.run(task, stream, reset),
-            AgentWrapper::Code(agent) => agent.run(task, stream, reset),
+            AgentWrapper::FunctionCalling(agent) => agent.run(task, stream, reset).await,
+            AgentWrapper::Code(agent) => agent.run(task, stream, reset).await,
         }
     }
     fn get_logs_mut(&mut self) -> &mut Vec<Step> {
@@ -61,8 +62,10 @@ impl AgentWrapper {
         }
     }
 }
+
+#[async_trait]
 impl Model for ModelWrapper {
-    fn run(
+    async fn run(
         &self,
         messages: Vec<Message>,
         tools: Vec<ToolInfo>,
@@ -70,8 +73,8 @@ impl Model for ModelWrapper {
         args: Option<HashMap<String, Vec<String>>>,
     ) -> Result<Box<dyn ModelResponse>, AgentError> {
         match self {
-            ModelWrapper::OpenAI(m) => Ok(m.run(messages, tools, max_tokens, args)?),
-            ModelWrapper::Ollama(m) => Ok(m.run(messages, tools, max_tokens, args)?),
+            ModelWrapper::OpenAI(m) => Ok(m.run(messages, tools, max_tokens, args).await?),
+            ModelWrapper::Ollama(m) => Ok(m.run(messages, tools, max_tokens, args).await?),
         }
     }
 }
@@ -120,7 +123,7 @@ struct Args {
     max_steps: Option<usize>,
 }
 
-fn create_tool(tool_type: &ToolType) -> Box<dyn AnyTool> {
+fn create_tool(tool_type: &ToolType) -> Box<dyn AsyncTool> {
     match tool_type {
         ToolType::DuckDuckGo => Box::new(DuckDuckGoSearchTool::new()),
         ToolType::VisitWebsite => Box::new(VisitWebsiteTool::new()),
@@ -129,10 +132,11 @@ fn create_tool(tool_type: &ToolType) -> Box<dyn AnyTool> {
     }
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let tools: Vec<Box<dyn AnyTool>> = args.tools.iter().map(create_tool).collect();
+    let tools: Vec<Box<dyn AsyncTool>> = args.tools.iter().map(create_tool).collect();
 
     // Create model based on type
     let model = match args.model_type {
@@ -173,7 +177,7 @@ fn main() -> Result<()> {
     };
 
     // Run the agent with the task from stdin
-    let _result = agent.run(&args.task, args.stream, args.reset)?;
+    let _result = agent.run(&args.task, args.stream, args.reset).await?;
     let logs = agent.get_logs_mut();
 
     // store logs in a file

@@ -1,11 +1,16 @@
 use std::collections::HashMap;
 
-use crate::errors::AgentError;
-use crate::models::model_traits::{Model, ModelResponse};
-use crate::models::types::{Message, MessageRole};
-use crate::tools::ToolInfo;
+use crate::{
+    errors::AgentError,
+    models::{
+        model_traits::{Model, ModelResponse},
+        types::{Message, MessageRole},
+    },
+    tools::tool_traits::ToolInfo,
+};
 use anyhow::Result;
-use reqwest::blocking::Client;
+use async_trait::async_trait;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -128,7 +133,6 @@ impl OpenAIServerModel {
         let model_id = model_id.unwrap_or("gpt-4o-mini").to_string();
         let base_url = base_url.unwrap_or("https://api.openai.com/v1/chat/completions");
         let client = Client::new();
-
         OpenAIServerModel {
             base_url: base_url.to_string(),
             model_id,
@@ -139,8 +143,9 @@ impl OpenAIServerModel {
     }
 }
 
+#[async_trait]
 impl Model for OpenAIServerModel {
-    fn run(
+    async fn run(
         &self,
         messages: Vec<Message>,
         tools_to_call_from: Vec<ToolInfo>,
@@ -158,7 +163,7 @@ impl Model for OpenAIServerModel {
 
         if !tools_to_call_from.is_empty() {
             body["tools"] = json!(tools_to_call_from);
-            body["tool_choice"] = json!("required");
+            body["tool_choice"] = json!("auto");
         }
 
         if let Some(args) = args {
@@ -174,18 +179,19 @@ impl Model for OpenAIServerModel {
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&body)
             .send()
+            .await
             .map_err(|e| {
                 AgentError::Generation(format!("Failed to get response from OpenAI: {}", e))
             })?;
 
         match response.status() {
             reqwest::StatusCode::OK => {
-                let response = response.json::<OpenAIResponse>().unwrap();
+                let response = response.json::<OpenAIResponse>().await.unwrap();
                 Ok(Box::new(response))
             }
             _ => Err(AgentError::Generation(format!(
                 "Failed to get response from OpenAI: {}",
-                response.text().unwrap()
+                response.text().await.unwrap()
             ))),
         }
     }

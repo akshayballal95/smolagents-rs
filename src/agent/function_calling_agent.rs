@@ -1,20 +1,31 @@
-use std::collections::HashMap;
 use anyhow::Result;
+use async_trait::async_trait;
 use log::info;
+use std::collections::HashMap;
 
-use crate::{errors::AgentError, models::{model_traits::Model, openai::{FunctionCall, ToolCall}}, prompts::TOOL_CALLING_SYSTEM_PROMPT, tools::{AnyTool, ToolGroup}};
+use crate::{
+    errors::AgentError,
+    models::{
+        model_traits::Model,
+        openai::{FunctionCall, ToolCall},
+    },
+    prompts::TOOL_CALLING_SYSTEM_PROMPT,
+    tools::{AsyncTool, ToolGroup},
+};
 
 use super::{agent_step::Step, agent_trait::Agent, multistep_agent::MultiStepAgent};
 
-
-pub struct FunctionCallingAgent<M: Model> {
+pub struct FunctionCallingAgent<M>
+where
+    M: Model + Send + Sync + 'static,
+{
     base_agent: MultiStepAgent<M>,
 }
 
-impl<M: Model + std::fmt::Debug> FunctionCallingAgent<M> {
+impl<M: Model + std::fmt::Debug + Send + Sync + 'static> FunctionCallingAgent<M> {
     pub fn new(
         model: M,
-        tools: Vec<Box<dyn AnyTool>>,
+        tools: Vec<Box<dyn AsyncTool>>,
         system_prompt: Option<&str>,
         managed_agents: Option<HashMap<String, Box<dyn Agent>>>,
         description: Option<&str>,
@@ -33,7 +44,8 @@ impl<M: Model + std::fmt::Debug> FunctionCallingAgent<M> {
     }
 }
 
-impl<M: Model + std::fmt::Debug> Agent for FunctionCallingAgent<M> {
+#[async_trait]
+impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for FunctionCallingAgent<M> {
     fn name(&self) -> &'static str {
         self.base_agent.name()
     }
@@ -65,7 +77,7 @@ impl<M: Model + std::fmt::Debug> Agent for FunctionCallingAgent<M> {
     /// Perform one step in the ReAct framework: the agent thinks, acts, and observes the result.
     ///
     /// Returns None if the step is not final.
-    fn step(&mut self, log_entry: &mut Step) -> Result<Option<String>> {
+    async fn step(&mut self, log_entry: &mut Step) -> Result<Option<String>> {
         match log_entry {
             Step::ActionStep(step_log) => {
                 let agent_memory = self.base_agent.write_inner_memory_from_logs(None)?;
@@ -77,15 +89,19 @@ impl<M: Model + std::fmt::Debug> Agent for FunctionCallingAgent<M> {
                     .iter()
                     .map(|tool| tool.tool_info())
                     .collect::<Vec<_>>();
-                let model_message = self.base_agent.model.run(
-                    self.base_agent.input_messages.as_ref().unwrap().clone(),
-                    tools,
-                    None,
-                    Some(HashMap::from([(
-                        "stop".to_string(),
-                        vec!["Observation:".to_string()],
-                    )])),
-                )?;
+                let model_message = self
+                    .base_agent
+                    .model
+                    .run(
+                        self.base_agent.input_messages.as_ref().unwrap().clone(),
+                        tools,
+                        None,
+                        Some(HashMap::from([(
+                            "stop".to_string(),
+                            vec!["Observation:".to_string()],
+                        )])),
+                    )
+                    .await?;
                 step_log.llm_output = Some(model_message.get_response().unwrap_or_default());
                 let mut observations = Vec::new();
                 let mut tools = model_message.get_tools_used()?;
@@ -125,7 +141,7 @@ impl<M: Model + std::fmt::Debug> Agent for FunctionCallingAgent<M> {
                         match function_name.as_str() {
                             "final_answer" => {
                                 info!("Executing tool call: {}", function_name);
-                                let answer = self.base_agent.tools.call(&tool.function)?;
+                                let answer = self.base_agent.tools.call(&tool.function).await?;
                                 return Ok(Some(answer));
                             }
                             _ => {
@@ -133,7 +149,7 @@ impl<M: Model + std::fmt::Debug> Agent for FunctionCallingAgent<M> {
                                     "Executing tool call: {} with arguments: {:?}",
                                     function_name, tool.function.arguments
                                 );
-                                let observation = self.base_agent.tools.call(&tool.function);
+                                let observation = self.base_agent.tools.call(&tool.function).await;
                                 match observation {
                                     Ok(observation) => {
                                         observations.push(format!(
@@ -181,7 +197,6 @@ impl<M: Model + std::fmt::Debug> Agent for FunctionCallingAgent<M> {
     }
 }
 
-
 fn extract_action_json(text: &str) -> Option<String> {
     if let Some(action_part) = text.split("Action:").nth(1) {
         // Trim whitespace and find the first '{' and last '}'
@@ -195,7 +210,7 @@ fn extract_action_json(text: &str) -> Option<String> {
 }
 
 // Example usage in your parse_response function:
-fn parse_response(response: &str) -> Result<serde_json::Value, AgentError> {
+pub fn parse_response(response: &str) -> Result<serde_json::Value, AgentError> {
     if let Some(json_str) = extract_action_json(response) {
         serde_json::from_str(&json_str).map_err(|e| AgentError::Parsing(e.to_string()))
     } else {

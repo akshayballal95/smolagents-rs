@@ -1,5 +1,6 @@
 //! This module contains the Google search tool.
 
+use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -36,7 +37,7 @@ impl GoogleSearchTool {
         }
     }
 
-    fn forward(&self, query: &str, filter_year: Option<&str>) -> String {
+    async fn forward(&self, query: &str, filter_year: Option<&str>) -> String {
         let params = {
             let mut params = json!({
                 "engine": "google",
@@ -120,6 +121,7 @@ impl GoogleSearchTool {
     }
 }
 
+#[async_trait]
 impl Tool for GoogleSearchTool {
     type Params = GoogleSearchToolParams;
     fn name(&self) -> &'static str {
@@ -129,10 +131,10 @@ impl Tool for GoogleSearchTool {
         self.tool.description
     }
 
-    fn forward(&self, arguments: GoogleSearchToolParams) -> Result<String> {
+    async fn forward(&self, arguments: GoogleSearchToolParams) -> Result<String> {
         let query = arguments.query;
         let filter_year = arguments.filter_year;
-        Ok(self.forward(&query, filter_year.as_deref()))
+        Ok(self.forward(&query, filter_year.as_deref()).await)
     }
 }
 
@@ -140,11 +142,11 @@ impl Tool for GoogleSearchTool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_google_search_tool() {
+    #[tokio::test]
+    async fn test_google_search_tool() {
         let tool = GoogleSearchTool::new(None);
         let query = "What is the capital of France?";
-        let result = tool.forward(query, None);
+        let result = tool.forward(query, None).await;
         assert!(result.contains("Paris"));
     }
 }

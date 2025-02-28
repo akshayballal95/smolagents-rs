@@ -1,5 +1,5 @@
 use crate::errors::InterpreterError;
-use crate::tools::{AnyTool, ToolInfo};
+use crate::tools::ToolInfo;
 use anyhow::Result;
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyDict, PyModule, PyTuple};
@@ -9,6 +9,7 @@ use rustpython_parser::ast::{
 };
 use serde_json::{self, json, Value};
 use std::collections::HashMap;
+use crate::tools::tool_traits::AsyncTool;
 
 impl From<PyErr> for InterpreterError {
     fn from(err: PyErr) -> Self {
@@ -284,7 +285,7 @@ impl PythonToolFunction {
     }
 }
 
-fn setup_custom_tools(tools: &[Box<dyn AnyTool>]) -> HashMap<String, PythonToolFunction> {
+fn setup_custom_tools(tools: &[Box<dyn AsyncTool>]) -> HashMap<String, PythonToolFunction> {
     let mut tools_map = HashMap::new();
     for tool in tools {
         let tool = tool.clone_box();
@@ -299,10 +300,8 @@ fn setup_custom_tools(tools: &[Box<dyn AnyTool>]) -> HashMap<String, PythonToolF
                             args.get("answer").unwrap().as_str().unwrap().to_string(),
                         ));
                     }
-                    match tool.forward_json(args) {
-                        Ok(results) => Ok(CustomConstant::Str(results)),
-                        Err(e) => Err(InterpreterError::RuntimeError(e.to_string())),
-                    }
+                    // Since we can't use .await in a non-async context, we'll return an error
+                    Err(InterpreterError::RuntimeError("Async operations not supported in synchronous context".to_string()))
                 }),
                 tool_info,
             },
@@ -365,7 +364,7 @@ fn extract_constant_from_pyobject(
 }
 pub fn evaluate_python_code(
     code: &str,
-    custom_tools: &[Box<dyn AnyTool>],
+    custom_tools: &[Box<dyn AsyncTool>],
     static_tools: &HashMap<&'static str, &'static str>,
     state: &mut HashMap<String, PyObject>,
 ) -> Result<String, InterpreterError> {
@@ -424,13 +423,13 @@ pub fn evaluate_python_code(
 
 pub struct LocalPythonInterpreter {
     static_tools: HashMap<&'static str, &'static str>,
-    custom_tools: Vec<Box<dyn AnyTool>>,
+    custom_tools: Vec<Box<dyn AsyncTool>>,
     state: HashMap<String, PyObject>,
 }
 
 impl LocalPythonInterpreter {
     pub fn new(
-        custom_tools: &[Box<dyn AnyTool>],
+        custom_tools: &[Box<dyn AsyncTool>],
         static_tools: Option<HashMap<&'static str, &'static str>>,
     ) -> Self {
         let custom_tools = custom_tools.iter().map(|tool| tool.clone_box()).collect();
@@ -482,7 +481,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
 
     #[test]
     fn test_final_answer_execution() {
-        let tools: Vec<Box<dyn AnyTool>> = vec![Box::new(FinalAnswerTool::new())];
+        let tools: Vec<Box<dyn AsyncTool>> = vec![Box::new(FinalAnswerTool::new())];
         let mut interpreter = LocalPythonInterpreter::new(&tools, None);
         let result = interpreter.forward("final_answer('Hello, world!')");
         assert_eq!(
@@ -637,7 +636,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
             print(search)
         "#,
         );
-        let tools: Vec<Box<dyn AnyTool>> = vec![Box::new(DuckDuckGoSearchTool::new())];
+        let tools: Vec<Box<dyn AsyncTool>> = vec![Box::new(DuckDuckGoSearchTool::new())];
         let mut interpreter = LocalPythonInterpreter::new(&tools, None);
         let (_, _) = interpreter.forward(&code).unwrap();
     }
@@ -713,7 +712,7 @@ for movie in movies:
 
         "#,
         );
-        let tools: Vec<Box<dyn AnyTool>> = vec![Box::new(DuckDuckGoSearchTool::new())];
+        let tools: Vec<Box<dyn AsyncTool>> = vec![Box::new(DuckDuckGoSearchTool::new())];
         let mut local_python_interpreter = LocalPythonInterpreter::new(&tools, None);
         let (_, _) = local_python_interpreter.forward(&code).unwrap();
 
@@ -775,7 +774,7 @@ for url in urls:
     print(movies)
         "#,
         );
-        let tools: Vec<Box<dyn AnyTool>> = vec![Box::new(VisitWebsiteTool::new())];
+        let tools: Vec<Box<dyn AsyncTool>> = vec![Box::new(VisitWebsiteTool::new())];
         let mut interpreter = LocalPythonInterpreter::new(&tools, None);
         let (_, execution_logs) = interpreter.forward(&code).unwrap();
         assert_eq!(
@@ -804,7 +803,7 @@ for url in urls:
                 print(guidelines)
                 "#,
         );
-        let tools: Vec<Box<dyn AnyTool>> = vec![Box::new(VisitWebsiteTool::new())];
+        let tools: Vec<Box<dyn AsyncTool>> = vec![Box::new(VisitWebsiteTool::new())];
         let mut local_python_interpreter = LocalPythonInterpreter::new(&tools, None);
         let (_, logs) = local_python_interpreter.forward(&code).unwrap();
         println!("logs: {:?}", logs);

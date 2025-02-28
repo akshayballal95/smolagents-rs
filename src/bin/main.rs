@@ -1,24 +1,33 @@
 use anyhow::Result;
+use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
 use colored::*;
-use smolagents_rs::agent::Step;
+use mcp_client::{
+    ClientCapabilities, ClientInfo, McpClient, McpClientTrait, McpService, StdioTransport,
+    Transport,
+};
+use mcp_core::protocol::JsonRpcMessage;
 use smolagents_rs::agent::{Agent, CodeAgent, FunctionCallingAgent};
+use smolagents_rs::agent::{McpAgent, Step};
 use smolagents_rs::errors::AgentError;
 use smolagents_rs::models::model_traits::{Model, ModelResponse};
 use smolagents_rs::models::ollama::{OllamaModel, OllamaModelBuilder};
 use smolagents_rs::models::openai::OpenAIServerModel;
 use smolagents_rs::models::types::Message;
 use smolagents_rs::tools::{
-    AnyTool, DuckDuckGoSearchTool, GoogleSearchTool, ToolInfo, VisitWebsiteTool,
+    AsyncTool, DuckDuckGoSearchTool, GoogleSearchTool, ToolInfo, VisitWebsiteTool,
 };
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Write};
+use std::time::Duration;
+use tower::Service;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum AgentType {
     FunctionCalling,
     Code,
+    Mcp,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -40,27 +49,45 @@ enum ModelWrapper {
     Ollama(OllamaModel),
 }
 
-enum AgentWrapper {
-    FunctionCalling(FunctionCallingAgent<ModelWrapper>),
-    Code(CodeAgent<ModelWrapper>),
+enum AgentWrapper<
+    M: Model + Send + Sync + std::fmt::Debug + 'static,
+    S: Service<JsonRpcMessage, Response = JsonRpcMessage> + Clone + Send + Sync + 'static,
+> where
+    S::Future: Send,
+    S::Error: Into<mcp_client::Error>,
+{
+    FunctionCalling(FunctionCallingAgent<M>),
+    Code(CodeAgent<M>),
+    Mcp(McpAgent<M, S>),
 }
 
-impl AgentWrapper {
-    fn run(&mut self, task: &str, stream: bool, reset: bool) -> Result<String> {
+impl<
+        M: Model + Send + Sync + std::fmt::Debug + 'static,
+        S: Service<JsonRpcMessage, Response = JsonRpcMessage> + Clone + Send + Sync + 'static,
+    > AgentWrapper<M, S>
+where
+    S::Future: Send,
+    S::Error: Into<mcp_client::Error>,
+{
+    async fn run(&mut self, task: &str, stream: bool, reset: bool) -> Result<String> {
         match self {
-            AgentWrapper::FunctionCalling(agent) => agent.run(task, stream, reset),
-            AgentWrapper::Code(agent) => agent.run(task, stream, reset),
+            AgentWrapper::FunctionCalling(agent) => agent.run(task, stream, reset).await,
+            AgentWrapper::Code(agent) => agent.run(task, stream, reset).await,
+            AgentWrapper::Mcp(agent) => agent.run(task, stream, reset).await,
         }
     }
     fn get_logs_mut(&mut self) -> &mut Vec<Step> {
         match self {
             AgentWrapper::FunctionCalling(agent) => agent.get_logs_mut(),
             AgentWrapper::Code(agent) => agent.get_logs_mut(),
+            AgentWrapper::Mcp(agent) => agent.get_logs_mut(),
         }
     }
 }
+
+#[async_trait]
 impl Model for ModelWrapper {
-    fn run(
+    async fn run(
         &self,
         messages: Vec<Message>,
         tools: Vec<ToolInfo>,
@@ -68,8 +95,8 @@ impl Model for ModelWrapper {
         args: Option<HashMap<String, Vec<String>>>,
     ) -> Result<Box<dyn ModelResponse>, AgentError> {
         match self {
-            ModelWrapper::OpenAI(m) => Ok(m.run(messages, tools, max_tokens, args)?),
-            ModelWrapper::Ollama(m) => Ok(m.run(messages, tools, max_tokens, args)?),
+            ModelWrapper::OpenAI(m) => Ok(m.run(messages, tools, max_tokens, args).await?),
+            ModelWrapper::Ollama(m) => Ok(m.run(messages, tools, max_tokens, args).await?),
         }
     }
 }
@@ -110,7 +137,7 @@ struct Args {
     max_steps: Option<usize>,
 }
 
-fn create_tool(tool_type: &ToolType) -> Box<dyn AnyTool> {
+fn create_tool(tool_type: &ToolType) -> Box<dyn AsyncTool> {
     match tool_type {
         ToolType::DuckDuckGo => Box::new(DuckDuckGoSearchTool::new()),
         ToolType::VisitWebsite => Box::new(VisitWebsiteTool::new()),
@@ -118,10 +145,11 @@ fn create_tool(tool_type: &ToolType) -> Box<dyn AnyTool> {
     }
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let tools: Vec<Box<dyn AnyTool>> = args.tools.iter().map(create_tool).collect();
+    let tools: Vec<Box<dyn AsyncTool>> = args.tools.iter().map(create_tool).collect();
 
     // Create model based on type
     let model = match args.model_type {
@@ -135,7 +163,10 @@ fn main() -> Result<()> {
             OllamaModelBuilder::new()
                 .model_id(&args.model_id)
                 .ctx_length(8000)
-                .url(args.base_url.unwrap_or("http://localhost:11434".to_string()))
+                .url(
+                    args.base_url
+                        .unwrap_or("http://localhost:11434".to_string()),
+                ).with_native_tools(true)
                 .build(),
         ),
     };
@@ -158,6 +189,36 @@ fn main() -> Result<()> {
             Some("CLI Agent"),
             args.max_steps,
         )?),
+        AgentType::Mcp => {
+            // 1) Create the transport
+            let transport = StdioTransport::new(
+                "npx",
+                vec![
+                    "@modelcontextprotocol/server-filesystem".to_string(),
+                    "/home/akshay/projects/mcp_test".to_string(),
+                ],
+                HashMap::new(),
+            );
+            // 2) Start the transport to get a handle
+            let transport_handle = transport.start().await?;
+
+            // 3) Create the service with timeout middleware
+            let service = McpService::with_timeout(transport_handle, Duration::from_secs(10));
+
+            // 4) Create the client with the middleware-wrapped service
+            let mut client = McpClient::new(service);
+            // Initialize
+            let _ = client
+                .initialize(
+                    ClientInfo {
+                        name: "test-client".into(),
+                        version: "1.0.0".into(),
+                    },
+                    ClientCapabilities::default(),
+                )
+                .await?;
+            AgentWrapper::Mcp(McpAgent::new(model, None, None, None, args.max_steps, client).await?)
+        }
     };
 
     let mut file: File = File::create("logs.txt")?;
@@ -180,7 +241,7 @@ fn main() -> Result<()> {
         }
 
         // Run the agent with the task from stdin
-        let _result = agent.run(task, args.stream, true)?;
+        let _result = agent.run(task, args.stream, true).await?;
         // Get the last log entry and serialize it in a controlled way
 
         let logs = agent.get_logs_mut();

@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 
+use async_trait::async_trait;
 use colored::Colorize;
 use log::info;
-use serde_json::json;
 use anyhow::Result;
 use crate::logger::LOGGER;
 use crate::models::model_traits::Model;
 use crate::models::types::{Message, MessageRole};
 use crate::prompts::{user_prompt_plan, SYSTEM_PROMPT_FACTS, SYSTEM_PROMPT_PLAN, TOOL_CALLING_SYSTEM_PROMPT};
-use crate::tools::{AnyTool, FinalAnswerTool, ToolGroup, ToolInfo};
+use crate::tools::{FinalAnswerTool, ToolGroup, ToolInfo, AsyncTool};
 
 use super::agent_step::Step;
 use super::agent_trait::Agent;
@@ -25,8 +25,8 @@ pub fn get_tool_description_with_args(tool: &ToolInfo) -> String {
     description = description.replace("{{ tool.description }}", tool.function.description);
     description = description.replace(
         "{{tool.inputs}}",
-        json!(&tool.function.parameters.schema)["properties"]
-            .to_string()
+        serde_json::to_string(&tool.function.parameters)
+            .unwrap()
             .as_str(),
     );
 
@@ -82,9 +82,12 @@ pub fn format_prompt_with_managed_agent_description(
 }
 
 
-pub struct MultiStepAgent<M: Model> {
+pub struct MultiStepAgent<M>
+where
+    M: Model + Send + Sync + 'static,
+{
     pub model: M,
-    pub tools: Vec<Box<dyn AnyTool>>,
+    pub tools: Vec<Box<dyn AsyncTool>>,
     pub system_prompt_template: String,
     pub name: &'static str,
     pub managed_agents: Option<HashMap<String, Box<dyn Agent>>>,
@@ -96,7 +99,11 @@ pub struct MultiStepAgent<M: Model> {
     pub logs: Vec<Step>,
 }
 
-impl<M: Model + std::fmt::Debug> Agent for MultiStepAgent<M> {
+#[async_trait]
+impl<M> Agent for MultiStepAgent<M>
+where
+    M: Model + std::fmt::Debug + Send + Sync + 'static,
+{
     fn name(&self) -> &'static str {
         self.name
     }
@@ -131,23 +138,26 @@ impl<M: Model + std::fmt::Debug> Agent for MultiStepAgent<M> {
     /// Perform one step in the ReAct framework: the agent thinks, acts, and observes the result.
     ///
     /// Returns None if the step is not final.
-    fn step(&mut self, _: &mut Step) -> Result<Option<String>> {
+    async fn step(&mut self, _: &mut Step) -> Result<Option<String>> {
         todo!()
     }
     
-    fn direct_run(&mut self, _task: &str) -> anyhow::Result<String> {
+    
+    async fn direct_run(&mut self, _task: &str) -> anyhow::Result<String> {
         let mut final_answer: Option<String> = None;
+        println!("direct_run");
         while final_answer.is_none() && self.get_step_number() < self.get_max_steps() {
             std::println!("Step number: {:?}", self.get_step_number());
             let mut step_log = Step::ActionStep(super::agent_step::AgentStep::new(self.get_step_number()));
     
-            final_answer = self.step(&mut step_log)?;
+            final_answer = self.step(&mut step_log).await?;
+            println!("final_answer: {:?}", final_answer);
             self.get_logs_mut().push(step_log);
             self.increment_step_number();
         }
     
         if final_answer.is_none() && self.get_step_number() >= self.get_max_steps() {
-            final_answer = self.provide_final_answer(_task)?;
+            final_answer = self.provide_final_answer(_task).await?;
         }
         log::info!(
             "Final answer: {}",
@@ -158,11 +168,11 @@ impl<M: Model + std::fmt::Debug> Agent for MultiStepAgent<M> {
         Ok(final_answer.unwrap_or_else(|| "Max steps reached without final answer".to_string()))
     }
     
-    fn stream_run(&mut self, _task: &str) -> anyhow::Result<String> {
+    async fn stream_run(&mut self, _task: &str) -> anyhow::Result<String> {
         std::todo!()
     }
     
-    fn run(&mut self, task: &str, stream: bool, reset: bool) -> anyhow::Result<String> {
+    async fn run(&mut self, task: &str, stream: bool, reset: bool) -> anyhow::Result<String> {
         // self.task = task.to_string();
         self.set_task(task);
     
@@ -178,12 +188,12 @@ impl<M: Model + std::fmt::Debug> Agent for MultiStepAgent<M> {
         }
         self.get_logs_mut().push(Step::TaskStep(task.to_string()));
         match stream {
-            true => self.stream_run(task),
-            false => self.direct_run(task),
+            true => self.stream_run(task).await,
+            false => self.direct_run(task).await,
         }
     }
     
-    fn provide_final_answer(&mut self, task: &str) -> anyhow::Result<Option<String>> {
+    async fn provide_final_answer(&mut self, task: &str) -> anyhow::Result<Option<String>> {
         let mut input_messages = std::vec![Message {
             role: MessageRole::System,
             content: "An agent tried to answer a user query but it got stuck and failed to do so. You are tasked with providing an answer instead. Here is the agent's memory:".to_string(),
@@ -200,7 +210,8 @@ impl<M: Model + std::fmt::Debug> Agent for MultiStepAgent<M> {
         });
         let response = self
             .model()
-            .run(input_messages, std::vec![], None, None)?
+            .run(input_messages, std::vec![], None, None)
+            .await?
             .get_response()?;
         Ok(Some(response))
     }
@@ -298,18 +309,22 @@ impl<M: Model + std::fmt::Debug> Agent for MultiStepAgent<M> {
     }
 }
 
-impl<M: Model> MultiStepAgent<M> {
+impl<M> MultiStepAgent<M>
+where
+    M: Model + Send + Sync + 'static,
+{
     pub fn new(
         model: M,
-        mut tools: Vec<Box<dyn AnyTool>>,
+        mut tools: Vec<Box<dyn AsyncTool>>,
         system_prompt: Option<&str>,
         managed_agents: Option<HashMap<String, Box<dyn Agent>>>,
         description: Option<&str>,
         max_steps: Option<usize>,
     ) -> Result<Self> {
         // Initialize logger
-        log::set_logger(&LOGGER).unwrap();
-        log::set_max_level(log::LevelFilter::Info);
+        let _ = log::set_logger(&LOGGER).map(|()| {
+            log::set_max_level(log::LevelFilter::Info);
+        });
 
         let name = "MultiStepAgent";
 
@@ -368,7 +383,7 @@ impl<M: Model> MultiStepAgent<M> {
         Ok(self.system_prompt_template.clone())
     }
 
-    pub fn planning_step(&mut self, task: &str, is_first_step: bool, _step: usize) {
+    pub async fn planning_step(&mut self, task: &str, is_first_step: bool, _step: usize) -> Result<()> {
         if is_first_step {
             let message_prompt_facts = Message {
                 role: MessageRole::System,
@@ -398,9 +413,8 @@ impl<M: Model> MultiStepAgent<M> {
                     None,
                     None,
                 )
-                .unwrap()
-                .get_response()
-                .unwrap_or("".to_string());
+                .await?
+                .get_response()?;
             let message_system_prompt_plan = Message {
                 role: MessageRole::System,
                 content: SYSTEM_PROMPT_PLAN.to_string(),
@@ -439,9 +453,8 @@ impl<M: Model> MultiStepAgent<M> {
                         vec!["Observation:".to_string()],
                     )])),
                 )
-                .unwrap()
-                .get_response()
-                .unwrap();
+                .await?
+                .get_response()?;
             let final_plan_redaction = format!(
                 "Here is the plan of action that I will follow for the task: \n{}",
                 answer_plan
@@ -454,5 +467,6 @@ impl<M: Model> MultiStepAgent<M> {
             ));
             info!("Plan: {}", final_plan_redaction.blue().bold());
         }
+        Ok(())
     }
 }

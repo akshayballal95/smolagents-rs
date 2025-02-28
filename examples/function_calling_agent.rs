@@ -1,9 +1,10 @@
 use smolagents_rs::agent::{Agent, FunctionCallingAgent};
 use smolagents_rs::models::openai::OpenAIServerModel;
-use smolagents_rs::tools::{AnyTool, DuckDuckGoSearchTool, VisitWebsiteTool};
+use smolagents_rs::tools::{AsyncTool, DuckDuckGoSearchTool, VisitWebsiteTool};
 
-fn main() {
-    let tools: Vec<Box<dyn AnyTool>> = vec![
+#[tokio::main]
+async fn main() {
+    let tools: Vec<Box<dyn AsyncTool>> = vec![
         Box::new(DuckDuckGoSearchTool::new()),
         Box::new(VisitWebsiteTool::new()),
     ];
@@ -16,5 +17,7 @@ fn main() {
     let mut agent = FunctionCallingAgent::new(model, tools, None, None, None, None).unwrap();
     let _result = agent
         .run("Who has the most followers on Twitter?", false, false)
+        .await
         .unwrap();
+    println!("{}", _result);
 }

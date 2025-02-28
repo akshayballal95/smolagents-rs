@@ -1,5 +1,6 @@
 //! This module contains the visit website tool. The model uses this tool to visit a webpage and read its content as a markdown string.
 
+use async_trait::async_trait;
 use htmd::HtmlToMarkdown;
 use reqwest::Url;
 use schemars::JsonSchema;
@@ -23,22 +24,22 @@ impl VisitWebsiteTool {
         }
     }
 
-    pub fn forward(&self, url: &str) -> String {
-        let client = reqwest::blocking::Client::builder()
+    pub async fn forward(&self, url: &str) -> String{
+        let client = reqwest::Client::builder()
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
             .build()
-            .unwrap_or_else(|_| reqwest::blocking::Client::new());
+            .unwrap_or_else(|_| reqwest::Client::new());
         let url = match Url::parse(url) {
             Ok(url) => url,
             Err(_) => Url::parse(&format!("https://{}", url)).unwrap(),
         };
 
-        let response = client.get(url.clone()).send();
+        let response = client.get(url.clone()).send().await;
 
         match response {
             Ok(resp) => {
                 if resp.status().is_success() {
-                    match resp.text() {
+                    match resp.text().await {
                         Ok(text) => {
                             let converter = HtmlToMarkdown::builder()
                                 .skip_tags(vec!["script", "style", "header", "nav", "footer"])
@@ -70,6 +71,7 @@ pub struct VisitWebsiteToolParams {
     url: String,
 }
 
+#[async_trait]
 impl Tool for VisitWebsiteTool {
     type Params = VisitWebsiteToolParams;
     fn name(&self) -> &'static str {
@@ -80,9 +82,9 @@ impl Tool for VisitWebsiteTool {
         self.tool.description
     }
 
-    fn forward(&self, arguments: VisitWebsiteToolParams) -> Result<String> {
+    async fn forward(&self, arguments: VisitWebsiteToolParams) -> Result<String> {
         let url = arguments.url;
-        Ok(self.forward(&url))
+        Ok(self.forward(&url).await)
     }
 }
 
@@ -90,11 +92,11 @@ impl Tool for VisitWebsiteTool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_visit_website_tool() {
+    #[tokio::test]
+    async fn test_visit_website_tool() {
         let tool = VisitWebsiteTool::new();
         let url = "https://finance.yahoo.com/quote/NVDA";
-        let _result = tool.forward(&url);
+        let _result = tool.forward(&url).await;
         println!("{}", _result);
     }
 }

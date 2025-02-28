@@ -1,4 +1,5 @@
 //! This module contains the Python interpreter tool. The model uses this tool to evaluate python code.
+use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +34,7 @@ impl PythonInterpreterTool {
     }
 }
 
+#[async_trait]
 impl Tool for PythonInterpreterTool {
     type Params = PythonInterpreterToolParams;
     fn name(&self) -> &'static str {
@@ -41,7 +43,7 @@ impl Tool for PythonInterpreterTool {
     fn description(&self) -> &'static str {
         self.tool.description
     }
-    fn forward(&self, arguments: PythonInterpreterToolParams) -> Result<String> {
+    async fn forward(&self, arguments: PythonInterpreterToolParams) -> Result<String> {
         let mut interpreter = LocalPythonInterpreter::new(&[], None);
         let result = interpreter.forward(&arguments.code);
         match result {

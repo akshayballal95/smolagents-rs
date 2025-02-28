@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use anyhow::Result;
+use async_trait::async_trait;
 use log::info;
 
 use crate::{
@@ -7,7 +8,7 @@ use crate::{
     local_python_interpreter::LocalPythonInterpreter,
     models::{model_traits::Model, openai::{FunctionCall, ToolCall}},
     prompts::CODE_SYSTEM_PROMPT,
-    tools::AnyTool,
+    tools::AsyncTool,
 };
 
 
@@ -23,7 +24,7 @@ pub struct CodeAgent<M: Model> {
 impl<M: Model> CodeAgent<M> {
     pub fn new(
         model: M,
-        tools: Vec<Box<dyn AnyTool>>,
+        tools: Vec<Box<dyn AsyncTool>>,
         system_prompt: Option<&str>,
         managed_agents: Option<HashMap<String, Box<dyn Agent>>>,
         description: Option<&str>,
@@ -49,7 +50,8 @@ impl<M: Model> CodeAgent<M> {
 }
 
 #[cfg(feature = "code-agent")]
-impl<M: Model + std::fmt::Debug> Agent for CodeAgent<M> {
+#[async_trait]
+impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for CodeAgent<M> {
     fn name(&self) -> &'static str {
         self.base_agent.name()
     }
@@ -77,7 +79,7 @@ impl<M: Model + std::fmt::Debug> Agent for CodeAgent<M> {
     fn model(&self) -> &dyn Model {
         self.base_agent.model()
     }
-    fn step(&mut self, log_entry: &mut Step) -> Result<Option<String>> {
+    async fn step(&mut self, log_entry: &mut Step) -> Result<Option<String>> {
         match log_entry {
             Step::ActionStep(step_log) => {
                 let agent_memory = self.base_agent.write_inner_memory_from_logs(None)?;
@@ -92,7 +94,7 @@ impl<M: Model + std::fmt::Debug> Agent for CodeAgent<M> {
                         "stop".to_string(),
                         vec!["Observation:".to_string(), "<end_code>".to_string()],
                     )])),
-                )?;
+                ).await?;
 
                 let response = llm_output.get_response()?;
                 step_log.llm_output = Some(response.clone());

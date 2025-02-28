@@ -6,13 +6,16 @@ use crate::{
     tools::tool_traits::ToolInfo,
 };
 use anyhow::Result;
-pub trait ModelResponse {
+use async_trait::async_trait;
+
+pub trait ModelResponse: Send + Sync {
     fn get_response(&self) -> Result<String, AgentError>;
     fn get_tools_used(&self) -> Result<Vec<ToolCall>, AgentError>;
 }
 
-pub trait Model {
-    fn run(
+#[async_trait]
+pub trait Model: Send + Sync + 'static {
+    async fn run(
         &self,
         input_messages: Vec<Message>,
         tools: Vec<ToolInfo>,

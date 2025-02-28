@@ -4,6 +4,8 @@ use serde_json::json;
 
 use crate::{errors::AgentError, tools::ToolInfo};
 use anyhow::Result;
+use async_trait::async_trait;
+use reqwest::Client;
 
 use super::{
     model_traits::{Model, ModelResponse},
@@ -11,23 +13,23 @@ use super::{
     types::Message,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct OllamaModel {
-    model_id: String,
-    temperature: f32,
-    url: String,
-    client: reqwest::blocking::Client,
-    ctx_length: usize,
-    max_tokens: usize,
-    native_tools: bool,
+    pub model_id: String,
+    pub temperature: f32,
+    pub url: String,
+    pub client: Client,
+    pub ctx_length: usize,
+    pub max_tokens: usize,
+    pub native_tools: bool,
 }
 
 #[derive(Default)]
 pub struct OllamaModelBuilder {
     model_id: String,
     temperature: Option<f32>,
-    client: Option<reqwest::blocking::Client>,
     url: Option<String>,
+    client: Option<Client>,
     ctx_length: Option<usize>,
     max_tokens: Option<usize>,
     native_tools: Option<bool>,
@@ -35,15 +37,14 @@ pub struct OllamaModelBuilder {
 
 impl OllamaModelBuilder {
     pub fn new() -> Self {
-        let client = reqwest::blocking::Client::new();
         Self {
-            model_id: "llama3.2".to_string(),
-            temperature: Some(0.5),
-            client: Some(client),
-            url: Some("http://localhost:11434".to_string()),
-            ctx_length: Some(2048),
-            max_tokens: Some(1500),
-            native_tools: Some(false),
+            model_id: "qwen2.5".to_string(),
+            temperature: None,
+            url: None,
+            client: None,
+            ctx_length: None,
+            max_tokens: None,
+            native_tools: None,
         }
     }
 
@@ -59,6 +60,11 @@ impl OllamaModelBuilder {
 
     pub fn url(mut self, url: String) -> Self {
         self.url = Some(url);
+        self
+    }
+
+    pub fn client(mut self, client: Client) -> Self {
+        self.client = Some(client);
         self
     }
 
@@ -95,8 +101,9 @@ impl OllamaModelBuilder {
     }
 }
 
+#[async_trait]
 impl Model for OllamaModel {
-    fn run(
+    async fn run(
         &self,
         messages: Vec<Message>,
         tools_to_call_from: Vec<ToolInfo>,
@@ -104,6 +111,7 @@ impl Model for OllamaModel {
         args: Option<HashMap<String, Vec<String>>>,
     ) -> Result<Box<dyn ModelResponse>, AgentError> {
         let tools = json!(tools_to_call_from);
+
 
         let mut body = json!({
             "model": self.model_id,
@@ -122,6 +130,7 @@ impl Model for OllamaModel {
         }
         if self.native_tools {
             body["tools"] = tools;
+            body["tool_choice"] = json!("required");
         }
 
         let response = self
@@ -130,18 +139,19 @@ impl Model for OllamaModel {
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
+            .await
             .map_err(|e| {
                 AgentError::Generation(format!("Failed to get response from Ollama: {}", e))
             })?;
         let status = response.status();
         if status.is_client_error() {
-            let error_message = response.text().unwrap_or_default();
+            let error_message = response.text().await.unwrap_or_default();
             return Err(AgentError::Generation(format!(
                 "Failed to get response from Ollama: {}",
                 error_message
             )));
         }
-        let output = response.json::<OpenAIResponse>().map_err(|e| {
+        let output = response.json::<OpenAIResponse>().await.map_err(|e| {
             AgentError::Generation(format!("Failed to parse response from Ollama: {}", e))
         })?;
         Ok(Box::new(output))

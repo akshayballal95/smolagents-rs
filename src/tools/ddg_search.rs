@@ -1,5 +1,6 @@
 //! This module contains the DuckDuckGo search tool.
 
+use async_trait::async_trait;
 use schemars::JsonSchema;
 use scraper::Selector;
 use serde::{Deserialize, Serialize};
@@ -37,14 +38,15 @@ impl DuckDuckGoSearchTool {
         }
     }
 
-    pub fn forward(&self, query: &str) -> Result<Vec<SearchResult>> {
-        let client = reqwest::blocking::Client::builder()
+    pub async fn forward(&self, query: &str) -> Result<Vec<SearchResult>> {
+        let client = reqwest::Client::builder()
             .user_agent("Mozilla/5.0 (compatible; MyRustTool/1.0)")
             .build()?;
         let response = client
             .get(format!("https://html.duckduckgo.com/html/?q={}", query))
-            .send()?;
-        let html = response.text().unwrap();
+            .send()
+            .await?;
+        let html = response.text().await?;
         let document = scraper::Html::parse_document(&html);
         let result_selector = Selector::parse(".result")
             .map_err(|e| anyhow::anyhow!("Failed to parse result selector: {}", e))?;
@@ -84,6 +86,7 @@ impl DuckDuckGoSearchTool {
     }
 }
 
+#[async_trait]
 impl Tool for DuckDuckGoSearchTool {
     type Params = DuckDuckGoSearchToolParams;
     fn name(&self) -> &'static str {
@@ -92,9 +95,9 @@ impl Tool for DuckDuckGoSearchTool {
     fn description(&self) -> &'static str {
         self.tool.description
     }
-    fn forward(&self, arguments: DuckDuckGoSearchToolParams) -> Result<String> {
+    async fn forward(&self, arguments: DuckDuckGoSearchToolParams) -> Result<String> {
         let query = arguments.query;
-        let results = self.forward(&query)?;
+        let results = self.forward(&query).await?;
         let results_string = results
             .iter()
             .map(|r| format!("[{}]({}) \n{}", r.title, r.url, r.snippet))
@@ -108,11 +111,11 @@ impl Tool for DuckDuckGoSearchTool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_duckduckgo_search_tool() {
+    #[tokio::test]
+    async fn test_duckduckgo_search_tool() {
         let tool = DuckDuckGoSearchTool::new();
         let query = "What is the capital of France?";
-        let result = tool.forward(query).unwrap();
+        let result = tool.forward(query).await.unwrap();
         assert!(result.iter().any(|r| r.snippet.contains("Paris")));
     }
 }

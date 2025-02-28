@@ -1,12 +1,12 @@
 //! This module contains the traits for tools that can be used in an agent.
 
 use anyhow::Result;
+use async_trait::async_trait;
 use schemars::gen::SchemaSettings;
-use schemars::schema::RootSchema;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::fmt::Debug;
 
 use crate::errors::{AgentError, AgentExecutionError};
@@ -16,6 +16,7 @@ use crate::models::openai::FunctionCall;
 pub trait Parameters: DeserializeOwned + JsonSchema {}
 
 /// A trait for tools that can be used in an agent.
+#[async_trait]
 pub trait Tool: Debug + Send + Sync {
     type Params: Parameters;
     /// The name of the tool.
@@ -23,7 +24,7 @@ pub trait Tool: Debug + Send + Sync {
     /// The description of the tool.
     fn description(&self) -> &'static str;
     /// The function to call when the tool is used.
-    fn forward(&self, arguments: Self::Params) -> Result<String>;
+    async fn forward(&self, arguments: Self::Params) -> Result<String>;
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -36,7 +37,7 @@ pub enum ToolType {
 #[derive(Serialize, Debug)]
 pub struct ToolInfo {
     #[serde(rename = "type")]
-    tool_type: ToolType,
+    pub tool_type: ToolType,
     pub function: ToolFunctionInfo,
 }
 /// This struct contains information about the function to call when the tool is used.
@@ -44,7 +45,7 @@ pub struct ToolInfo {
 pub struct ToolFunctionInfo {
     pub name: &'static str,
     pub description: &'static str,
-    pub parameters: RootSchema,
+    pub parameters: Value,
 }
 
 impl ToolInfo {
@@ -54,20 +55,20 @@ impl ToolInfo {
         let generator = settings.into_generator();
 
         let parameters = generator.into_root_schema_for::<P>();
-
+        
         Self {
             tool_type: ToolType::Function,
             function: ToolFunctionInfo {
                 name: tool.name(),
                 description: tool.description(),
-                parameters,
+                parameters: serde_json::to_value(parameters).unwrap(),
             },
         }
     }
 
     pub fn get_parameter_names(&self) -> Vec<String> {
-        if let Some(schema) = &self.function.parameters.schema.object {
-            return schema.properties.keys().cloned().collect();
+        if let Some(schema) = &self.function.parameters.get("properties") {
+            return schema.as_object().unwrap().keys().cloned().collect();
         }
         Vec::new()
     }
@@ -77,31 +78,42 @@ pub fn get_json_schema(tool: &ToolInfo) -> serde_json::Value {
     json!(tool)
 }
 
+#[async_trait]
 pub trait ToolGroup: Debug {
-    fn call(&self, arguments: &FunctionCall) -> Result<String, AgentExecutionError>;
+    async fn call(&self, arguments: &FunctionCall) -> Result<String, AgentExecutionError>;
     fn tool_info(&self) -> Vec<ToolInfo>;
-}
-
-impl ToolGroup for Vec<Box<dyn AnyTool>> {
-    fn call(&self, arguments: &FunctionCall) -> Result<String, AgentError> {
-        let tool = self.iter().find(|tool| tool.name() == arguments.name);
-        if let Some(tool) = tool {
-            let p = arguments.arguments.clone();
-            return tool.forward_json(p);
-        }
-        Err(AgentError::Execution("Tool not found".to_string()))
-    }
-    fn tool_info(&self) -> Vec<ToolInfo> {
-        self.iter().map(|tool| tool.tool_info()).collect()
-    }
 }
 
 pub trait AnyTool: Debug + Send + Sync {
     fn name(&self) -> &'static str;
     fn description(&self) -> &'static str;
-    fn forward_json(&self, json_args: serde_json::Value) -> Result<String, AgentError>;
     fn tool_info(&self) -> ToolInfo;
-    fn clone_box(&self) -> Box<dyn AnyTool>;
+}
+
+#[async_trait]
+pub trait AsyncTool: AnyTool {
+    async fn forward_json(&self, json_args: serde_json::Value) -> Result<String, AgentError>;
+    fn clone_box(&self) -> Box<dyn AsyncTool>;
+}
+
+#[async_trait]
+impl<T: Tool + Clone + 'static> AsyncTool for T {
+    async fn forward_json(&self, json_args: serde_json::Value) -> Result<String, AgentError> {
+        let params = serde_json::from_value::<T::Params>(json_args.clone()).map_err(|e| {
+            AgentError::Parsing(format!(
+                "Error when executing tool with arguments: {:?}: {}. As a reminder, this tool's description is: {} and takes inputs: {}",
+                json_args,
+                e,
+                self.description(),
+                json!(&self.tool_info().function.parameters)["properties"]
+            ))
+        })?;
+        Tool::forward(self, params).await.map_err(|e| AgentError::Execution(e.to_string()))
+    }
+
+    fn clone_box(&self) -> Box<dyn AsyncTool> {
+        Box::new(self.clone())
+    }
 }
 
 impl<T: Tool + Clone + 'static> AnyTool for T {
@@ -113,24 +125,22 @@ impl<T: Tool + Clone + 'static> AnyTool for T {
         Tool::description(self)
     }
 
-    fn forward_json(&self, json_args: serde_json::Value) -> Result<String, AgentError> {
-        let params = serde_json::from_value::<T::Params>(json_args.clone()).map_err(|e| {
-            AgentError::Parsing(format!(
-                "Error when executing tool with arguments: {:?}: {}. As a reminder, this tool's description is: {} and takes inputs: {}",
-                json_args,
-                e,
-                self.description(),
-                json!(&self.tool_info().function.parameters.schema)["properties"]
-            ))
-        })?;
-        Tool::forward(self, params).map_err(|e| AgentError::Execution(e.to_string()))
-    }
-
     fn tool_info(&self) -> ToolInfo {
         ToolInfo::new::<T::Params, T>(self)
     }
+}
 
-    fn clone_box(&self) -> Box<dyn AnyTool> {
-        Box::new(self.clone())
+#[async_trait]
+impl ToolGroup for Vec<Box<dyn AsyncTool>> {
+    async fn call(&self, arguments: &FunctionCall) -> Result<String, AgentError> {
+        let tool = self.iter().find(|tool| tool.name() == arguments.name);
+        if let Some(tool) = tool {
+            let p = arguments.arguments.clone();
+            return tool.forward_json(p).await;
+        }
+        Err(AgentError::Execution("Tool not found".to_string()))
+    }
+    fn tool_info(&self) -> Vec<ToolInfo> {
+        self.iter().map(|tool| tool.tool_info()).collect()
     }
 }
