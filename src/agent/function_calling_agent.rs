@@ -2,9 +2,11 @@ use anyhow::Result;
 use async_trait::async_trait;
 use log::info;
 use std::collections::HashMap;
+use futures::future::join_all;
 
 use crate::{
-    errors::AgentError,
+    agent::Agent,
+    errors::{AgentError, AgentExecutionError},
     models::{
         model_traits::Model,
         openai::{FunctionCall, ToolCall},
@@ -13,7 +15,7 @@ use crate::{
     tools::{AsyncTool, ToolGroup},
 };
 
-use super::{agent_step::Step, agent_trait::Agent, multistep_agent::MultiStepAgent};
+use super::{agent_step::Step, multistep_agent::MultiStepAgent};
 
 pub struct FunctionCallingAgent<M>
 where
@@ -135,34 +137,53 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for FunctionCalli
                     step_log.tool_call = None;
                     observations = vec!["No tool call was made. If this is the final answer, use the final_answer tool to return your answer.".to_string()];
                 } else {
-                    for tool in tools {
-                        let function_name = tool.clone().function.name;
-
+                    let tools_ref = &self.base_agent.tools;
+                    let futures = tools.into_iter().map(|tool| async move {
+                        let function_name = tool.function.name.clone();
                         match function_name.as_str() {
                             "final_answer" => {
                                 info!("Executing tool call: {}", function_name);
-                                let answer = self.base_agent.tools.call(&tool.function).await?;
-                                return Ok(Some(answer));
+                                let answer = tools_ref.call(&tool.function).await?;
+                                Ok::<_, AgentExecutionError>((true, function_name, answer))
                             }
                             _ => {
                                 info!(
                                     "Executing tool call: {} with arguments: {:?}",
                                     function_name, tool.function.arguments
                                 );
-                                let observation = self.base_agent.tools.call(&tool.function).await;
+                                let observation = tools_ref.call(&tool.function).await;
                                 match observation {
                                     Ok(observation) => {
-                                        observations.push(format!(
+                                        let formatted = format!(
                                             "Observation from {}: {}",
                                             function_name,
                                             observation.chars().take(30000).collect::<String>()
-                                        ));
+                                        );
+                                        Ok((false, function_name, formatted))
                                     }
-                                    Err(e) => {
-                                        observations.push(e.to_string());
-                                        info!("Error: {}", e);
+                                    Err(e) => Ok((false, function_name, e.to_string())),
+                                }
+                            }
+                        }
+                    });
+
+                    let results = join_all(futures).await;
+                    for result in results {
+                        match result {
+                            Ok((is_final, name, output)) => {
+                                if is_final {
+                                    return Ok(Some(output));
+                                } else {
+                                    let output_clone = output.clone();
+                                    observations.push(output);
+                                    if output_clone.starts_with("Error:") {
+                                        info!("Error in {}: {}", name, output_clone);
                                     }
                                 }
+                            }
+                            Err(e) => {
+                                observations.push(e.to_string());
+                                info!("Error: {}", e);
                             }
                         }
                     }

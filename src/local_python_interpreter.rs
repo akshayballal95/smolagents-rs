@@ -10,6 +10,7 @@ use rustpython_parser::ast::{
 use serde_json::{self, json, Value};
 use std::collections::HashMap;
 use crate::tools::tool_traits::AsyncTool;
+use std::sync::mpsc;
 
 impl From<PyErr> for InterpreterError {
     fn from(err: PyErr) -> Self {
@@ -291,6 +292,7 @@ fn setup_custom_tools(tools: &[Box<dyn AsyncTool>]) -> HashMap<String, PythonToo
         let tool = tool.clone_box();
         let tool_name = tool.name().to_string();
         let tool_info = tool.tool_info();
+        
         tools_map.insert(
             tool_name.clone(),
             PythonToolFunction {
@@ -300,8 +302,28 @@ fn setup_custom_tools(tools: &[Box<dyn AsyncTool>]) -> HashMap<String, PythonToo
                             args.get("answer").unwrap().as_str().unwrap().to_string(),
                         ));
                     }
-                    // Since we can't use .await in a non-async context, we'll return an error
-                    Err(InterpreterError::RuntimeError("Async operations not supported in synchronous context".to_string()))
+                    
+                    // Create a channel for thread communication
+                    let (tx, rx) = mpsc::channel();
+                    
+                    let tool_clone = tool.clone_box();
+                    // Spawn a new thread for the async operation
+                    std::thread::spawn(move || {
+                        // Create a new runtime just for this operation
+                        let rt = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .unwrap();
+                        let result = rt.block_on(tool_clone.forward_json(args));
+                        let _ = tx.send(result);
+                    });
+                    
+                    // Wait for the result
+                    match rx.recv() {
+                        Ok(Ok(result)) => Ok(CustomConstant::Str(result)),
+                        Ok(Err(e)) => Err(InterpreterError::RuntimeError(e.to_string())),
+                        Err(e) => Err(InterpreterError::RuntimeError(format!("Channel error: {}", e))),
+                    }
                 }),
                 tool_info,
             },
@@ -362,63 +384,84 @@ fn extract_constant_from_pyobject(
         Ok(CustomConstant::PyObj(obj.into_py(py)))
     }
 }
-pub fn evaluate_python_code(
+
+fn evaluate_python_code(
     code: &str,
     custom_tools: &[Box<dyn AsyncTool>],
     static_tools: &HashMap<&'static str, &'static str>,
     state: &mut HashMap<String, PyObject>,
 ) -> Result<String, InterpreterError> {
     let custom_tools = setup_custom_tools(custom_tools);
-    let result = Python::with_gil(|py| -> PyResult<String> {
-        let locals = state.clone().into_py_dict(py);
-        let globals = PyDict::new(py);
+    let code = code.to_string();
+    let static_tools = static_tools.clone();
+    let state_clone = state.clone();
 
-        // Add base Python tools to globals
-        for name in static_tools.keys() {
-            if let Ok(builtin) = py.eval(&format!("__builtins__.{}", name), None, None) {
-                globals.set_item(name, builtin)?;
+    // Move Python operations to a separate thread using std::thread
+    let handle = std::thread::spawn(move || {
+        Python::with_gil(|py| -> PyResult<(String, HashMap<String, PyObject>)> {
+            let locals = state_clone.clone().into_py_dict(py);
+            let globals = PyDict::new(py);
+
+            // Add base Python tools to globals
+            for name in static_tools.keys() {
+                if let Ok(builtin) = py.eval(&format!("__builtins__.{}", name), None, None) {
+                    globals.set_item(name, builtin)?;
+                }
             }
-        }
 
-        // Add custom tools to globals
-        for (name, tool) in custom_tools {
-            globals.set_item(name.to_string(), tool.into_py(py))?;
-        }
+            // Add custom tools to globals
+            for (name, tool) in custom_tools {
+                globals.set_item(name.to_string(), tool.into_py(py))?;
+            }
 
-        // Add math module functions that are in base_tools
-        let math = PyModule::import(py, "math")?;
-        globals.set_item("math", math)?;
+            // Add math module functions that are in base_tools
+            let math = PyModule::import(py, "math")?;
+            globals.set_item("math", math)?;
 
-        // Setup StringIO for capturing output
-        let io = PyModule::import(py, "io")?;
-        let string_io = io.call_method0("StringIO")?;
-        globals.set_item("stdout", string_io)?;
+            // Setup StringIO for capturing output
+            let io = PyModule::import(py, "io")?;
+            let string_io = io.call_method0("StringIO")?;
+            globals.set_item("stdout", string_io)?;
 
-        // Redirect stdout
-        py.run("import sys; sys.stdout = stdout", Some(globals), None)?;
+            // Redirect stdout
+            py.run("import sys; sys.stdout = stdout", Some(globals), None)?;
 
-        // Run the user code with restricted globals
-        py.run(code, Some(globals), Some(locals))?;
+            // Run the user code with restricted globals
+            py.run(&code, Some(globals), Some(locals))?;
 
-        // Get the output
-        locals.set_item(
-            "print_logs",
-            string_io.call_method0("getvalue")?.extract::<String>()?,
-        )?;
+            // Get the output
+            locals.set_item(
+                "print_logs",
+                string_io.call_method0("getvalue")?.extract::<String>()?,
+            )?;
 
-        // Update state with new locals
-        for key in locals.keys() {
-            let value = locals.get_item(key).unwrap();
-            state.insert(key.to_string(), value.into_py(py));
-        }
+            // Create new state from locals
+            let mut new_state = HashMap::new();
+            for key in locals.keys() {
+                let value = locals.get_item(key).unwrap();
+                new_state.insert(key.to_string(), value.into_py(py));
+            }
 
-        Ok(state
-            .get("print_logs")
-            .and_then(|obj| obj.extract::<String>(py).ok())
-            .unwrap_or_default())
+            let output = locals
+                .get_item("print_logs")
+                .and_then(|obj| obj.extract::<String>().ok())
+                .unwrap_or_default();
+
+            Ok((output, new_state))
+        })
     });
 
-    Ok(result?)
+    // Convert the JoinHandle result into our Result type
+    match handle.join() {
+        Ok(result) => {
+            let (output, new_state) = result?;
+            // Update the original state with new values
+            state.clear();
+            state.extend(new_state);
+            Ok(output)
+        }
+        Err(e) => Err(InterpreterError::RuntimeError(format!("Thread panicked: {:?}", e))),
+    }
 }
 
 pub struct LocalPythonInterpreter {
@@ -441,6 +484,7 @@ impl LocalPythonInterpreter {
             state: HashMap::new(),
         }
     }
+
     pub fn forward(&mut self, code: &str) -> Result<(String, String), InterpreterError> {
         let execution_logs = evaluate_python_code(
             code,
@@ -452,9 +496,9 @@ impl LocalPythonInterpreter {
         Ok(("".to_string(), execution_logs.to_string()))
     }
 }
+
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::tools::{DuckDuckGoSearchTool, FinalAnswerTool, VisitWebsiteTool};
 
@@ -688,36 +732,6 @@ for place in dinner_places:
 
         let code = textwrap::dedent(
             r#"
-movies = [
-    {"title": "Babygirl", "showtimes": ["12:50 pm", "6:20 pm"]},
-    {"title": "Better Man", "showtimes": ["9:20 pm"]},
-    {"title": "La acompañante", "showtimes": ["3:40 pm", "6:30 pm", "9:10 pm"]},
-    {"title": "Amenaza en el aire", "showtimes": ["9:30 pm"]},
-    {"title": "Juf Braaksel en de Geniale Ontsnapping", "showtimes": ["12:30 pm"]},
-    {"title": "Juffrouw Pots", "showtimes": ["10:35 am", "3:50 pm"]},
-    {"title": "K3 en Het Lied van de Zeemeermin", "showtimes": ["10:00 am"]},
-    {"title": "Marked Men", "showtimes": ["2:50 pm", "6:50 pm"]},
-    {"title": "Vaiana 2", "showtimes": ["11:10 am", "12:40 pm"]},
-    {"title": "Mufasa: El rey león", "showtimes": ["10:20 am", "3:10 pm", "9:00 pm"]},
-    {"title": "Paddington: Aventura en la selva", "showtimes": ["12:20 pm", "3:30 pm", "6:10 pm"]},
-    {"title": "Royal Opera House: The Tales of Hoffmann", "showtimes": ["1:30 pm"]},
-    {"title": "The Growcodile", "showtimes": ["10:10 am"]},
-    {"title": "Vivir el momento", "showtimes": ["5:20 pm"]},
-    {"title": "Wicked", "showtimes": ["7:00 pm"]},
-    {"title": "Woezel & Pip op Avontuur in de Tovertuin", "showtimes": ["10:30 am", "1:50 pm"]}
-]
-
-for movie in movies:
-    print(f"{movie['title']}: {', '.join(movie['showtimes'])}")
-
-        "#,
-        );
-        let tools: Vec<Box<dyn AsyncTool>> = vec![Box::new(DuckDuckGoSearchTool::new())];
-        let mut local_python_interpreter = LocalPythonInterpreter::new(&tools, None);
-        let (_, _) = local_python_interpreter.forward(&code).unwrap();
-
-        let code = textwrap::dedent(
-            r#"
 urls = [
     "https://www.tripadvisor.com/Restaurants-g187323-Berlin.html",
     "https://www.timeout.com/berlin/restaurants/best-restaurants-in-berlin"
@@ -729,6 +743,7 @@ for url in urls:
     print("\n" + "="*80 + "\n")  # Print separator between pages
     "#,
         );
+        let tools: Vec<Box<dyn AsyncTool>> = vec![Box::new(DuckDuckGoSearchTool::new())];
         let mut interpreter = LocalPythonInterpreter::new(&tools, None);
         let (_, _) = interpreter.forward(&code).unwrap();
     }

@@ -190,8 +190,9 @@ impl Model for OpenAIServerModel {
                 Ok(Box::new(response))
             }
             _ => Err(AgentError::Generation(format!(
-                "Failed to get response from OpenAI: {}",
-                response.text().await.unwrap()
+                "Failed to get response from OpenAI: {} {}",
+                response.status(),
+                response.text().await.unwrap(),
             ))),
         }
     }

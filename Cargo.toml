@@ -23,6 +23,7 @@ rustpython-parser = { version = "0.4.0", optional = true }
 pyo3 = { version = "0.19", features = ["auto-initialize"], optional = true }
 regex = "1.11.0"
 async-trait = "0.1.77"
+futures = "0.3"
 
 # mcp
 mcp-client = {git = "https://github.com/modelcontextprotocol/rust-sdk", optional = true}
@@ -38,7 +39,6 @@ textwrap = "0.16.0"
 [[bin]]
 name = "smolagents-rs"
 path = "src/bin/main.rs"
-all-features = true
 required-features = ["all"]
 
 [features]

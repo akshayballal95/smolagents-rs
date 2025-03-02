@@ -171,12 +171,16 @@ async fn main() -> Result<()> {
         ),
     };
 
-    // Create agent based on type
+    // Ollama doesn't work well with the default system prompt. Its better to use a simple custom one or none at all.
+    let system_prompt = match args.model_type {
+        ModelType::Ollama => Some("You are a helpful assistant that can answer questions and help with tasks. Keep calling tools until you have completed the task. Answer in markdown format.car"),
+        ModelType::OpenAI => None,
+    };
     let mut agent = match args.agent_type {
         AgentType::FunctionCalling => AgentWrapper::FunctionCalling(FunctionCallingAgent::new(
             model,
             tools,
-            None,
+            system_prompt,
             None,
             Some("CLI Agent"),
             args.max_steps,
