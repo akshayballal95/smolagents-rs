@@ -9,18 +9,18 @@ repository = "https://github.com/akshayballal95/smolagents-rs"
 
 [dependencies]
 htmd = "0.1.6"
-reqwest = {version = "0.12.12", features = ['blocking', 'json']}
-anyhow = "1.0.95"
+reqwest = {version = "0.12.12", features = ['json']}
+anyhow = "1.0.96"
 serde = {version = "1.0.217", features = ["derive"]}
-serde_json = "1.0.135"
-log = "0.4"
+serde_json = "1.0.139"
+log = "0.4.26"
 colored = "3.0.0"
-scraper = "0.22.0"
+scraper = "0.23.1"
 terminal_size = "0.4.1"
-schemars = "0.8.21"
-chrono = "0.4.39"
+schemars = "0.8.22"
+chrono = "0.4.40"
 rustpython-parser = { version = "0.4.0", optional = true }
-pyo3 = { version = "0.19", features = ["auto-initialize"], optional = true }
+pyo3 = { version = "0.23.5", features = ["auto-initialize"], optional = true }
 regex = "1.11.0"
 async-trait = "0.1.77"
 futures = "0.3"
@@ -29,7 +29,7 @@ futures = "0.3"
 mcp-client = {git = "https://github.com/modelcontextprotocol/rust-sdk", optional = true}
 mcp-core = {git = "https://github.com/modelcontextprotocol/rust-sdk", optional = true}
 tower = { version = "0.4", features = ["timeout", "util"] , optional = true}
-tokio = {version = "1.43.0", features = ["rt-multi-thread", "macros", "full"]}
+tokio = {version = "1.43.0", features = ["rt-multi-thread", "macros"], optional=true}
 
 [dev-dependencies]
 clap = { version = "4.5.1", features = ["derive"] }
@@ -45,7 +45,7 @@ required-features = ["all"]
 default = ["all"]
 cli = ["dep:clap"]
 mcp = ["dep:mcp-client", "dep:mcp-core", "dep:tower" ]
-code-agent = ["dep:rustpython-parser", "dep:pyo3"]
+code-agent = ["dep:rustpython-parser", "dep:pyo3", "dep:tokio"]
 all = ["cli", "code-agent", "mcp"]
 
 [dependencies.clap]

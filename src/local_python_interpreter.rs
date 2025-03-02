@@ -1,7 +1,7 @@
 use crate::errors::InterpreterError;
 use crate::tools::ToolInfo;
 use anyhow::Result;
-use pyo3::prelude::*;
+use pyo3::{prelude::*, IntoPyObjectExt};
 use pyo3::types::{IntoPyDict, PyDict, PyModule, PyTuple};
 use rustpython_parser::ast::{
     bigint::{BigInt, Sign},
@@ -10,7 +10,8 @@ use rustpython_parser::ast::{
 use serde_json::{self, json, Value};
 use std::collections::HashMap;
 use crate::tools::tool_traits::AsyncTool;
-use std::sync::mpsc;
+use tokio::runtime::Runtime;
+use std::ffi::CString;
 
 impl From<PyErr> for InterpreterError {
     fn from(err: PyErr) -> Self {
@@ -88,15 +89,29 @@ pub fn get_base_python_tools() -> HashMap<&'static str, &'static str> {
     .collect()
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum CustomConstant {
     Int(BigInt),
     Float(f64),
     Str(String),
     Bool(bool),
     Tuple(Vec<CustomConstant>),
-    PyObj(PyObject),
+    PyObj(Py<PyAny>),
     Dict(Vec<String>, Vec<CustomConstant>),
+}
+
+impl Clone for CustomConstant {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Int(i) => Self::Int(i.clone()),
+            Self::Float(f) => Self::Float(*f),
+            Self::Str(s) => Self::Str(s.clone()),
+            Self::Bool(b) => Self::Bool(*b),
+            Self::Tuple(t) => Self::Tuple(t.clone()),
+            Self::PyObj(p) => Python::with_gil(|py| Self::PyObj(p.clone_ref(py))),
+            Self::Dict(k, v) => Self::Dict(k.clone(), v.clone()),
+        }
+    }
 }
 
 impl CustomConstant {
@@ -200,28 +215,32 @@ impl From<Constant> for CustomConstant {
     }
 }
 
-impl IntoPy<PyObject> for CustomConstant {
-    fn into_py(self, py: Python<'_>) -> PyObject {
+impl<'py> IntoPyObject<'py> for CustomConstant {
+    type Target = PyAny;
+    type Output =Bound<'py, Self::Target>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error>{
         match self {
-            CustomConstant::Int(i) => convert_bigint_to_i64(&i).into_py(py),
-            CustomConstant::Float(f) => f.into_py(py),
-            CustomConstant::Str(s) => s.into_py(py),
-            CustomConstant::Bool(b) => b.into_py(py),
+            CustomConstant::Int(i) => convert_bigint_to_i64(&i).into_bound_py_any(py),
+            CustomConstant::Float(f) => f.into_bound_py_any(py),
+            CustomConstant::Str(s) => s.into_bound_py_any(py),
+            CustomConstant::Bool(b) => b.into_bound_py_any(py),
             CustomConstant::Tuple(t) => {
                 let py_list = t
                     .iter()
-                    .map(|x| x.clone().into_py(py))
-                    .collect::<Vec<PyObject>>();
-                py_list.into_py(py)
+                    .map(|x| x.clone().into_bound_py_any(py).unwrap())
+                    .collect::<Vec<Bound<'py, PyAny>>>();
+                PyTuple::new(py, py_list)?.into_bound_py_any(py)
             }
-            CustomConstant::PyObj(obj) => obj,
+            CustomConstant::PyObj(obj) => obj.into_bound_py_any(py),
             CustomConstant::Dict(keys, values) => {
                 let dict = PyDict::new(py);
                 for (key, value) in keys.iter().zip(values.iter()) {
-                    dict.set_item(key, value.clone().into_py(py))
+                    dict.set_item(key, value.clone().into_bound_py_any(py)?)
                         .unwrap_or_default();
                 }
-                dict.into_py(py)
+                dict.into_bound_py_any(py)
             }
         }
     }
@@ -236,8 +255,7 @@ pub struct PythonToolFunction {
 #[pymethods]
 impl PythonToolFunction {
     #[pyo3(signature = (*args, **kwargs))]
-    pub fn __call__(&self, args: &PyAny, kwargs: Option<&PyDict>) -> PyResult<CustomConstant> {
-        let mut arguments = HashMap::new();
+    pub fn __call__(&self, _py: Python<'_>, args: &Bound<'_, PyTuple>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<CustomConstant> {        let mut arguments = HashMap::new();
 
         // Handle args based on whether it's a single argument or multiple arguments
         if let Ok(tuple) = args.downcast::<PyTuple>() {
@@ -245,7 +263,7 @@ impl PythonToolFunction {
             Python::with_gil(|py| {
                 for (i, arg) in tuple.iter().enumerate() {
                     if i < self.tool_info.get_parameter_names().len() {
-                        let value = extract_constant_from_pyobject(arg, py).unwrap().str();
+                        let value = extract_constant_from_pyobject(&arg, py).unwrap().str();
                         arguments.insert(self.tool_info.get_parameter_names()[i].clone(), value);
                     }
                 }
@@ -267,7 +285,7 @@ impl PythonToolFunction {
             Python::with_gil(|py| {
                 for (key, value) in kwargs.iter() {
                     let key = key.extract::<String>()?;
-                    let value = extract_constant_from_pyobject(value, py).unwrap().str();
+                    let value = extract_constant_from_pyobject(&value, py).unwrap().str();
                     arguments.insert(key, value);
                 }
                 Ok::<_, PyErr>(())
@@ -286,12 +304,13 @@ impl PythonToolFunction {
     }
 }
 
-fn setup_custom_tools(tools: &[Box<dyn AsyncTool>]) -> HashMap<String, PythonToolFunction> {
+fn setup_custom_tools(tools: &[Box<dyn AsyncTool>], runtime: &Runtime) -> HashMap<String, PythonToolFunction> {
     let mut tools_map = HashMap::new();
     for tool in tools {
         let tool = tool.clone_box();
         let tool_name = tool.name().to_string();
         let tool_info = tool.tool_info();
+        let runtime = runtime.handle().clone();
         
         tools_map.insert(
             tool_name.clone(),
@@ -303,26 +322,15 @@ fn setup_custom_tools(tools: &[Box<dyn AsyncTool>]) -> HashMap<String, PythonToo
                         ));
                     }
                     
-                    // Create a channel for thread communication
-                    let (tx, rx) = mpsc::channel();
-                    
                     let tool_clone = tool.clone_box();
-                    // Spawn a new thread for the async operation
-                    std::thread::spawn(move || {
-                        // Create a new runtime just for this operation
-                        let rt = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                            .unwrap();
-                        let result = rt.block_on(tool_clone.forward_json(args));
-                        let _ = tx.send(result);
+                    // Execute the async operation synchronously
+                    let result = runtime.block_on(async {
+                        tool_clone.forward_json(args).await
                     });
                     
-                    // Wait for the result
-                    match rx.recv() {
-                        Ok(Ok(result)) => Ok(CustomConstant::Str(result)),
-                        Ok(Err(e)) => Err(InterpreterError::RuntimeError(e.to_string())),
-                        Err(e) => Err(InterpreterError::RuntimeError(format!("Channel error: {}", e))),
+                    match result {
+                        Ok(result) => Ok(CustomConstant::Str(result)),
+                        Err(e) => Err(InterpreterError::RuntimeError(e.to_string())),
                     }
                 }),
                 tool_info,
@@ -342,7 +350,7 @@ fn convert_bigint_to_i64(i: &BigInt) -> i64 {
 }
 
 fn extract_constant_from_pyobject(
-    obj: &PyAny,
+    obj: &Bound<'_, PyAny>,
     py: Python<'_>,
 ) -> Result<CustomConstant, InterpreterError> {
     if let Ok(float_val) = obj.extract::<f64>() {
@@ -368,20 +376,18 @@ fn extract_constant_from_pyobject(
         Ok(CustomConstant::Tuple(
             list_val.into_iter().map(CustomConstant::Float).collect(),
         ))
-    } else if let Ok(dict_value) = obj.extract::<&PyDict>() {
+    } else if let Ok(dict_value) = obj.downcast::<PyDict>() {
         let keys = dict_value
-            .keys()
             .iter()
-            .map(|key| key.extract::<String>())
+            .map(|(key, _)| key.extract::<String>())
             .collect::<Result<Vec<String>, _>>()?;
         let values = dict_value
-            .values()
             .iter()
-            .map(|value| extract_constant_from_pyobject(value, py))
+            .map(|(_, value)| extract_constant_from_pyobject(&value, py))
             .collect::<Result<Vec<CustomConstant>, _>>()?;
         Ok(CustomConstant::Dict(keys, values))
     } else {
-        Ok(CustomConstant::PyObj(obj.into_py(py)))
+        Ok(CustomConstant::PyObj(obj.into_bound_py_any(py)?.into()))
     }
 }
 
@@ -389,29 +395,35 @@ fn evaluate_python_code(
     code: &str,
     custom_tools: &[Box<dyn AsyncTool>],
     static_tools: &HashMap<&'static str, &'static str>,
-    state: &mut HashMap<String, PyObject>,
+    state: &mut HashMap<String, Py<PyAny>>,
+    runtime: &Runtime,
 ) -> Result<String, InterpreterError> {
-    let custom_tools = setup_custom_tools(custom_tools);
+    let custom_tools = setup_custom_tools(custom_tools, runtime);
     let code = code.to_string();
     let static_tools = static_tools.clone();
-    let state_clone = state.clone();
+    let state_clone: HashMap<String, Py<PyAny>> = Python::with_gil(|py| {
+        state.iter().map(|(k, v)| (k.clone(), v.clone_ref(py))).collect()
+    });
 
     // Move Python operations to a separate thread using std::thread
     let handle = std::thread::spawn(move || {
         Python::with_gil(|py| -> PyResult<(String, HashMap<String, PyObject>)> {
-            let locals = state_clone.clone().into_py_dict(py);
+            let locals = state_clone.into_py_dict(py)?;
             let globals = PyDict::new(py);
 
             // Add base Python tools to globals
             for name in static_tools.keys() {
-                if let Ok(builtin) = py.eval(&format!("__builtins__.{}", name), None, None) {
+                if let Ok(builtin) = {
+                    let cmd = CString::new(format!("__builtins__.{}", name)).unwrap();
+                    py.eval(&cmd, None, None)
+                } {
                     globals.set_item(name, builtin)?;
                 }
             }
 
             // Add custom tools to globals
             for (name, tool) in custom_tools {
-                globals.set_item(name.to_string(), tool.into_py(py))?;
+                globals.set_item(name.to_string(), tool.into_bound_py_any(py)?)?;
             }
 
             // Add math module functions that are in base_tools
@@ -421,13 +433,15 @@ fn evaluate_python_code(
             // Setup StringIO for capturing output
             let io = PyModule::import(py, "io")?;
             let string_io = io.call_method0("StringIO")?;
-            globals.set_item("stdout", string_io)?;
+            globals.set_item("stdout", string_io.clone())?;
 
             // Redirect stdout
-            py.run("import sys; sys.stdout = stdout", Some(globals), None)?;
-
+            let cmd = CString::new(format!("import sys; sys.stdout = stdout")).unwrap();
+            py.run(&cmd, Some(&globals), None)?;
+            
+            let code_str = CString::new(code).unwrap();
             // Run the user code with restricted globals
-            py.run(&code, Some(globals), Some(locals))?;
+            py.run(&code_str, Some(&globals), Some(&locals))?;
 
             // Get the output
             locals.set_item(
@@ -438,13 +452,13 @@ fn evaluate_python_code(
             // Create new state from locals
             let mut new_state = HashMap::new();
             for key in locals.keys() {
-                let value = locals.get_item(key).unwrap();
-                new_state.insert(key.to_string(), value.into_py(py));
+                let value = locals.get_item(key.clone()).unwrap();
+                new_state.insert(key.to_string(), value.into_pyobject(py)?.into());
             }
 
             let output = locals
                 .get_item("print_logs")
-                .and_then(|obj| obj.extract::<String>().ok())
+                .and_then(|obj| Ok(obj.unwrap().extract::<String>().unwrap_or_default()))
                 .unwrap_or_default();
 
             Ok((output, new_state))
@@ -468,6 +482,7 @@ pub struct LocalPythonInterpreter {
     static_tools: HashMap<&'static str, &'static str>,
     custom_tools: Vec<Box<dyn AsyncTool>>,
     state: HashMap<String, PyObject>,
+    runtime: Runtime,
 }
 
 impl LocalPythonInterpreter {
@@ -477,11 +492,13 @@ impl LocalPythonInterpreter {
     ) -> Self {
         let custom_tools = custom_tools.iter().map(|tool| tool.clone_box()).collect();
         let static_tools = static_tools.unwrap_or_else(get_base_python_tools);
+        let runtime = Runtime::new().unwrap();
 
         Self {
             static_tools,
             custom_tools,
             state: HashMap::new(),
+            runtime,
         }
     }
 
@@ -491,6 +508,7 @@ impl LocalPythonInterpreter {
             &self.custom_tools,
             &self.static_tools,
             &mut self.state,
+            &self.runtime,
         )?;
 
         Ok(("".to_string(), execution_logs.to_string()))

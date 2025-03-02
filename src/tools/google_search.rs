@@ -4,10 +4,10 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use anyhow::{anyhow, Result};
 
 use super::base::BaseTool;
 use super::tool_traits::Tool;
-use anyhow::Result;
 
 #[derive(Deserialize, JsonSchema)]
 #[schemars(title = "GoogleSearchToolParams")]
@@ -37,7 +37,7 @@ impl GoogleSearchTool {
         }
     }
 
-    async fn forward(&self, query: &str, filter_year: Option<&str>) -> String {
+    async fn forward(&self, query: &str, filter_year: Option<&str>) -> Result<String> {
         let params = {
             let mut params = json!({
                 "engine": "google",
@@ -53,20 +53,21 @@ impl GoogleSearchTool {
             params
         };
 
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::Client::new();
         let response = client
             .get("https://serpapi.com/search.json")
             .query(&params)
-            .send();
+            .send()
+            .await;
         match response {
             Ok(resp) => {
                 if resp.status().is_success() {
-                    let results: serde_json::Value = resp.json().unwrap();
+                    let results: serde_json::Value = resp.json().await?;
                     if results.get("organic_results").is_none() {
                         if filter_year.is_some() {
-                            return format!("'organic_results' key not found for query: '{}' with filtering on year={}. Use a less restrictive query or do not filter on year.", query, filter_year.unwrap());
+                            return Err(anyhow!(format!("'organic_results' key not found for query: '{}' with filtering on year={}. Use a less restrictive query or do not filter on year.", query, filter_year.unwrap())));
                         } else {
-                            return format!("'organic_results' key not found for query: '{}'. Use a less restrictive query.", query);
+                            return Err(anyhow!(format!("'organic_results' key not found for query: '{}'. Use a less restrictive query.", query)));
                         }
                     }
 
@@ -78,7 +79,7 @@ impl GoogleSearchTool {
                         } else {
                             "".to_string()
                         };
-                        return format!("No results found for '{}'. Try with a more general query, or remove the year filter.", query);
+                        return Err(anyhow!(format!("No results found for '{}'. Try with a more general query, or remove the year filter.", query)));
                     }
 
                     let mut web_snippets = Vec::new();
@@ -107,16 +108,19 @@ impl GoogleSearchTool {
                         web_snippets.push(redacted_version);
                     }
 
-                    format!("## Search Results\n{}", web_snippets.join("\n\n"))
+                    Ok(format!("## Search Results\n{}", web_snippets.join("\n\n")))
                 } else {
-                    format!(
+                    Err(anyhow!(
                         "Failed to fetch search results: HTTP {}, Error: {}",
                         resp.status(),
-                        resp.text().unwrap()
-                    )
+                        resp.text().await.unwrap()
+                    ))
                 }
             }
-            Err(e) => format!("Failed to make the request: {}", e),
+            Err(e) => Err(anyhow!(
+                "Failed to make the request: {}",
+                e
+            )),
         }
     }
 }
@@ -134,7 +138,7 @@ impl Tool for GoogleSearchTool {
     async fn forward(&self, arguments: GoogleSearchToolParams) -> Result<String> {
         let query = arguments.query;
         let filter_year = arguments.filter_year;
-        Ok(self.forward(&query, filter_year.as_deref()).await)
+        self.forward(&query, filter_year.as_deref()).await
     }
 }
 
@@ -146,7 +150,7 @@ mod tests {
     async fn test_google_search_tool() {
         let tool = GoogleSearchTool::new(None);
         let query = "What is the capital of France?";
-        let result = tool.forward(query, None).await;
+        let result = tool.forward(query, None).await.unwrap();
         assert!(result.contains("Paris"));
     }
 }

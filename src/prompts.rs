@@ -160,6 +160,7 @@ Here are the rules you should always follow to solve your task:
 8. You can use imports in your code, but only from the following list of modules: {{authorized_imports}}
 9. The state persists between code executions: so if in one step you've created variables or imported modules, these will all persist.
 10. Don't give up! You're in charge of solving the task, not providing directions to solve it.
+11. The current time is {{current_time}}.
 
 Now Begin! If you solve the task correctly, you will receive a reward of $1,000,000.
 
