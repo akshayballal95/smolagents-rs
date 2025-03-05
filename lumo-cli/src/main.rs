@@ -2,26 +2,27 @@ use anyhow::Result;
 use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
 use colored::*;
+use lumo::agent::{Agent, CodeAgent, FunctionCallingAgent};
+use lumo::agent::{McpAgent, Step};
+use lumo::errors::AgentError;
+use lumo::models::model_traits::{Model, ModelResponse};
+use lumo::models::ollama::{OllamaModel, OllamaModelBuilder};
+use lumo::models::openai::OpenAIServerModel;
+use lumo::models::types::Message;
+use lumo::tools::{AsyncTool, DuckDuckGoSearchTool, GoogleSearchTool, ToolInfo, VisitWebsiteTool};
 use mcp_client::{
     ClientCapabilities, ClientInfo, McpClient, McpClientTrait, McpService, StdioTransport,
     Transport,
 };
 use mcp_core::protocol::JsonRpcMessage;
-use smolagents_rs::agent::{Agent, CodeAgent, FunctionCallingAgent};
-use smolagents_rs::agent::{McpAgent, Step};
-use smolagents_rs::errors::AgentError;
-use smolagents_rs::models::model_traits::{Model, ModelResponse};
-use smolagents_rs::models::ollama::{OllamaModel, OllamaModelBuilder};
-use smolagents_rs::models::openai::OpenAIServerModel;
-use smolagents_rs::models::types::Message;
-use smolagents_rs::tools::{
-    AsyncTool, DuckDuckGoSearchTool, GoogleSearchTool, ToolInfo, VisitWebsiteTool,
-};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Write};
 use std::time::Duration;
 use tower::Service;
+
+mod config;
+use config::Servers;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum AgentType {
@@ -108,6 +109,10 @@ struct Args {
     #[arg(short = 'a', long, value_enum, default_value = "function-calling")]
     agent_type: AgentType,
 
+    /// Show the location of the configuration file
+    #[arg(long = "config-path")]
+    show_config_path: bool,
+
     /// List of tools to use
     #[arg(short = 'l', long = "tools", value_enum, num_args = 1.., value_delimiter = ',', default_values_t = [ToolType::DuckDuckGo, ToolType::VisitWebsite])]
     tools: Vec<ToolType>,
@@ -149,6 +154,17 @@ fn create_tool(tool_type: &ToolType) -> Box<dyn AsyncTool> {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Show config path if requested
+    if args.show_config_path {
+        let config_path = Servers::config_path()?;
+        println!("Configuration file location: {}", config_path.display());
+        return Ok(());
+    }
+
+    // Load server configurations
+    let servers = Servers::load()?;
+    println!("Available servers: {:?}", servers.servers.keys());
+
     let tools: Vec<Box<dyn AsyncTool>> = args.tools.iter().map(create_tool).collect();
 
     // Create model based on type
@@ -166,7 +182,8 @@ async fn main() -> Result<()> {
                 .url(
                     args.base_url
                         .unwrap_or("http://localhost:11434".to_string()),
-                ).with_native_tools(true)
+                )
+                .with_native_tools(true)
                 .build(),
         ),
     };
@@ -194,34 +211,42 @@ async fn main() -> Result<()> {
             args.max_steps,
         )?),
         AgentType::Mcp => {
-            // 1) Create the transport
-            let transport = StdioTransport::new(
-                "npx",
-                vec![
-                    "@modelcontextprotocol/server-filesystem".to_string(),
-                    "/home/akshay/projects/mcp_test".to_string(),
-                ],
-                HashMap::new(),
-            );
-            // 2) Start the transport to get a handle
-            let transport_handle = transport.start().await?;
+            // Initialize all configured servers
+            let mut clients = Vec::new();
 
-            // 3) Create the service with timeout middleware
-            let service = McpService::with_timeout(transport_handle, Duration::from_secs(10));
+            // Iterate through all server configurations
+            for (server_name, server_config) in servers.servers.iter() {
+                // Create transport for this server
+                let transport = StdioTransport::new(
+                    &server_config.command,
+                    server_config.args.clone(),
+                    server_config.env.clone().unwrap_or_default(),
+                );
 
-            // 4) Create the client with the middleware-wrapped service
-            let mut client = McpClient::new(service);
-            // Initialize
-            let _ = client
-                .initialize(
-                    ClientInfo {
-                        name: "test-client".into(),
-                        version: "1.0.0".into(),
-                    },
-                    ClientCapabilities::default(),
-                )
-                .await?;
-            AgentWrapper::Mcp(McpAgent::new(model, None, None, None, args.max_steps, client).await?)
+                // Start the transport
+                let transport_handle = transport.start().await?;
+                let service = McpService::with_timeout(transport_handle, Duration::from_secs(10));
+                let mut client = McpClient::new(service);
+
+                // Initialize the client with a unique name
+                let _ = client
+                    .initialize(
+                        ClientInfo {
+                            name: format!("{}-client", server_name),
+                            version: "1.0.0".into(),
+                        },
+                        ClientCapabilities::default(),
+                    )
+                    .await?;
+
+                clients.push(client);
+            }
+            
+
+            // Create MCP agent with all initialized clients
+            AgentWrapper::Mcp(
+                McpAgent::new(model, None, None, None, args.max_steps, clients).await?,
+            )
         }
     };
 

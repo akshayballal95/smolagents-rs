@@ -57,8 +57,10 @@ pub trait Agent: Send + Sync {
             self.reset_step_number();
         } else if self.get_logs_mut().is_empty() {
             self.get_logs_mut().push(system_prompt_step);
+            self.reset_step_number();
         } else {
             self.get_logs_mut()[0] = system_prompt_step;
+            self.reset_step_number();
         }
         self.get_logs_mut().push(Step::TaskStep(task.to_string()));
         match stream {

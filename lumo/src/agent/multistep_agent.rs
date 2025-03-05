@@ -323,7 +323,7 @@ where
     ) -> Result<Self> {
         // Initialize logger
         let _ = log::set_logger(&LOGGER).map(|()| {
-            log::set_max_level(log::LevelFilter::Info);
+            log::set_max_level(log::LevelFilter::Error);
         });
 
         let name = "MultiStepAgent";

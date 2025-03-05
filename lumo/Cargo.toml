@@ -1,0 +1,57 @@
+[package]
+name = "lumo"
+version = "0.1.3"
+edition = "2021"
+description = "A rust port of the the HuggingFace smolagents library. Build LLM agents with tools and code execution."
+license = "Apache-2.0"
+authors = ["Akshay Ballal <arballal@gmail.com>"]
+repository = "https://github.com/akshayballal95/smolagents-rs"
+
+[dependencies]
+htmd.workspace = true
+reqwest.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+colored.workspace = true
+scraper.workspace = true
+terminal_size.workspace = true
+schemars = "0.8.22"
+chrono = "0.4.40"
+rustpython-parser = { version = "0.4.0", optional = true }
+pyo3 = { version = "0.23.5", features = ["auto-initialize"], optional = true }
+regex = "1.11.0"
+async-trait = "0.1.77"
+futures = "0.3"
+
+# mcp
+mcp-client = {git = "https://github.com/modelcontextprotocol/rust-sdk", optional = true}
+mcp-core = {git = "https://github.com/modelcontextprotocol/rust-sdk", optional = true}
+tower = { version = "0.4", features = ["timeout", "util"] , optional = true}
+tokio = {version = "1.43.0", features = ["rt-multi-thread", "macros"], optional=true}
+
+[dev-dependencies]
+clap = { version = "4.5.1", features = ["derive"] }
+textwrap = "0.16.0"
+
+[[example]]
+name = "cli"
+required-features = ["cli", "code-agent"]
+
+
+[features]
+default = []
+cli = ["dep:clap"]
+mcp = ["dep:mcp-client", "dep:mcp-core", "dep:tower" ]
+code-agent = ["dep:rustpython-parser", "dep:pyo3", "dep:tokio"]
+all = ["cli", "code-agent", "mcp"]
+
+[dependencies.clap]
+version = "4.5.1"
+features = ["derive"]
+optional = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

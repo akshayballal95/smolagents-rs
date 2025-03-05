@@ -5,12 +5,12 @@ use mcp_client::{
     ClientCapabilities, ClientInfo, Error as ClientError, McpClient, McpClientTrait, McpService,
     StdioTransport, Transport,
 };
-use smolagents_rs::agent::Agent;
-use smolagents_rs::models::openai::OpenAIServerModel;
+use lumo::agent::Agent;
+use lumo::models::openai::OpenAIServerModel;
 use std::time::Duration;
 
-use smolagents_rs::agent::mcp_agent::McpAgent;
-use smolagents_rs::prompts::TOOL_CALLING_SYSTEM_PROMPT;
+use lumo::agent::mcp_agent::McpAgent;
+use lumo::prompts::TOOL_CALLING_SYSTEM_PROMPT;
 
 #[tokio::main]
 async fn main() -> Result<(), ClientError> {
@@ -59,7 +59,7 @@ async fn main() -> Result<(), ClientError> {
         None,
         None,
         None,
-            client,
+        vec![client],
         )
         .await
         .unwrap();

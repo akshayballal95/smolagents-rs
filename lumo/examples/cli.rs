@@ -4,14 +4,14 @@ use anyhow::Result;
 use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
 use serde_json;
-use smolagents_rs::agent::Step;
-use smolagents_rs::agent::{Agent, CodeAgent, FunctionCallingAgent};
-use smolagents_rs::errors::AgentError;
-use smolagents_rs::models::model_traits::{Model, ModelResponse};
-use smolagents_rs::models::ollama::{OllamaModel, OllamaModelBuilder};
-use smolagents_rs::models::openai::OpenAIServerModel;
-use smolagents_rs::models::types::Message;
-use smolagents_rs::tools::{
+use lumo::agent::Step;
+use lumo::agent::{Agent, CodeAgent, FunctionCallingAgent};
+use lumo::errors::AgentError;
+use lumo::models::model_traits::{Model, ModelResponse};
+use lumo::models::ollama::{OllamaModel, OllamaModelBuilder};
+use lumo::models::openai::OpenAIServerModel;
+use lumo::models::types::Message;
+use lumo::tools::{
     AsyncTool, DuckDuckGoSearchTool, GoogleSearchTool, PythonInterpreterTool, ToolInfo,
     VisitWebsiteTool,
 };

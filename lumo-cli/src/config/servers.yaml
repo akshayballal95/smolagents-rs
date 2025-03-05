@@ -1,0 +1,22 @@
+---
+# Lumo CLI Server Configurations
+# This file can be edited to add or modify server configurations
+
+# Default filesystem server configuration
+filesystem:
+  command: npx
+  args:
+    - "@modelcontextprotocol/server-filesystem"
+    - "/home/projects/mcp_test"
+  env: null
+
+
+
+# You can add more server configurations below
+# Example:
+# custom_server:
+#   command: npx
+#   args:
+#     - "@modelcontextprotocol/server-custom"
+#   env:
+#     CUSTOM_API_KEY: "" 

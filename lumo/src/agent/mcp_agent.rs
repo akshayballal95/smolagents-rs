@@ -7,6 +7,7 @@ use crate::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
+use futures::future::join_all;
 use log::info;
 use mcp_client::{Error, McpClient, McpClientTrait};
 use mcp_core::{protocol::JsonRpcMessage, Content, Tool};
@@ -33,20 +34,20 @@ where
     S::Future: Send,
 {
     base_agent: MultiStepAgent<M>,
-    mcp_client: McpClient<S>,
+    mcp_clients: Vec<McpClient<S>>,
     tools: Vec<Tool>,
 }
 
 impl From<Tool> for ToolInfo {
     fn from(tool: Tool) -> Self {
-        let schema = serde_json::from_value::<serde_json::Value>(tool.input_schema)
-            .unwrap_or_default();
+        let schema =
+            serde_json::from_value::<serde_json::Value>(tool.input_schema).unwrap_or_default();
         ToolInfo {
             tool_type: ToolType::Function,
             function: ToolFunctionInfo {
                 name: Box::leak(tool.name.into_boxed_str()),
                 description: Box::leak(tool.description.into_boxed_str()),
-                parameters:schema  ,
+                parameters: schema,
             },
         }
     }
@@ -75,13 +76,16 @@ where
         managed_agents: Option<HashMap<String, Box<dyn Agent>>>,
         description: Option<&str>,
         max_steps: Option<usize>,
-        mcp_client: McpClient<S>,
+        mcp_clients: Vec<McpClient<S>>,
     ) -> Result<Self> {
         let system_prompt = match system_prompt {
             Some(prompt) => prompt.to_string(),
             None => TOOL_CALLING_SYSTEM_PROMPT.to_string(),
         };
-        let tools = mcp_client.list_tools(None).await?.tools;
+        let mut tools = Vec::new();
+        for client in &mcp_clients {
+            tools.extend(client.list_tools(None).await?.tools);
+        }
         let description = match description {
             Some(desc) => desc.to_string(),
             None => "A multi-step agent that can solve tasks using a series of tools".to_string(),
@@ -96,7 +100,7 @@ where
         )?;
         Ok(Self {
             base_agent,
-            mcp_client,
+            mcp_clients,
             tools: tools.to_vec(),
         })
     }
@@ -143,7 +147,12 @@ where
                 let agent_memory = self.base_agent.write_inner_memory_from_logs(None)?;
                 self.base_agent.input_messages = Some(agent_memory.clone());
                 step_log.agent_memory = Some(agent_memory.clone());
-                let mut tools = self.tools.iter().cloned().map(ToolInfo::from).collect::<Vec<_>>();
+                let mut tools = self
+                    .tools
+                    .iter()
+                    .cloned()
+                    .map(ToolInfo::from)
+                    .collect::<Vec<_>>();
                 let final_answer_tool = ToolInfo::from(Tool::new(
                     "final_answer",
                     "Use this to provide your final answer to the user's request",
@@ -156,10 +165,10 @@ where
                             }
                         },
                         "required": ["answer"]
-                    })
+                    }),
                 ));
                 tools.push(final_answer_tool);
-                
+
                 let model_message = self
                     .base_agent
                     .model
@@ -174,7 +183,7 @@ where
                     )
                     .await?;
                 step_log.llm_output = Some(model_message.get_response().unwrap_or_default());
-                
+
                 let mut observations = Vec::new();
                 let tools = model_message.get_tools_used()?;
                 step_log.tool_call = Some(tools.clone());
@@ -184,7 +193,7 @@ where
                         return Ok(Some(response));
                     }
                 }
-                
+
                 for tool in tools {
                     let function_name = tool.clone().function.name;
 
@@ -192,6 +201,7 @@ where
                         "final_answer" => {
                             info!("Executing tool call: {}", function_name);
                             let answer = self.base_agent.tools.call(&tool.function).await?;
+                            step_log.observations = Some(vec![answer.clone()]);
                             return Ok(Some(answer));
                         }
                         _ => {
@@ -199,30 +209,35 @@ where
                                 "Executing tool call: {} with arguments: {:?}",
                                 function_name, tool.function.arguments
                             );
-                            let observation = self
-                                .mcp_client
-                                .call_tool(&tool.function.name, tool.function.arguments)
-                                .await;
-                            match observation {
-                                Ok(observation) => {
-                                    let observation = observation
-                                        .content
-                                        .iter()
-                                        .map(|content| match content {
-                                            Content::Text(text) => text.text.clone(),
-                                            _ => "".to_string(),
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join("\n");
-                                    observations.push(format!(
-                                        "Observation from {}: {}",
-                                        function_name,
-                                        observation.chars().take(30000).collect::<String>()
-                                    ));
+                            let mut futures = Vec::new();
+                            for client in &self.mcp_clients {
+                                if client.list_tools(None).await?.tools.iter().any(|t| t.name == tool.function.name) {
+                                    futures.push(client.call_tool(&tool.function.name, tool.function.arguments.clone()));
                                 }
-                                Err(e) => {
-                                    observations.push(e.to_string());
-                                    info!("Error: {}", e);
+                            }
+                            let results = join_all(futures).await;
+                            for result in results {
+                                match result {
+                                    Ok(observation) => {
+                                        let text = observation
+                                            .content
+                                            .iter()
+                                            .map(|content| match content {
+                                                Content::Text(text) => text.text.clone(),
+                                                _ => "".to_string(),
+                                            })
+                                            .collect::<Vec<_>>()
+                                            .join("\n");
+                                        observations.push(format!(
+                                            "Observation from {}: {}",
+                                            function_name,
+                                            text.chars().take(30000).collect::<String>()
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        observations.push(format!("Error from {}: {}", function_name, e));
+                                        info!("Error: {}", e);
+                                    }
                                 }
                             }
                         }

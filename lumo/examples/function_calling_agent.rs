@@ -1,6 +1,6 @@
-use smolagents_rs::agent::{Agent, FunctionCallingAgent};
-use smolagents_rs::models::openai::OpenAIServerModel;
-use smolagents_rs::tools::{AsyncTool, DuckDuckGoSearchTool, VisitWebsiteTool};
+use lumo::agent::{Agent, FunctionCallingAgent};
+use lumo::models::openai::OpenAIServerModel;
+use lumo::tools::{AsyncTool, DuckDuckGoSearchTool, VisitWebsiteTool};
 
 #[tokio::main]
 async fn main() {
