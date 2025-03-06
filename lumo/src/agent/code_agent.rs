@@ -12,7 +12,7 @@ use crate::{
 };
 
 
-use super::{agent_step::Step, agent_trait::Agent, multistep_agent::MultiStepAgent};
+use super::{agent_step::Step, agent_trait::Agent, multistep_agent::MultiStepAgent, AgentStep, AgentStream};
 
 #[cfg(feature = "code-agent")]
 pub struct CodeAgent<M: Model> {
@@ -40,6 +40,7 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> CodeAgent<M> {
             description,
             max_steps,
         )?;
+        
         let local_python_interpreter = LocalPythonInterpreter::new(&base_agent.tools, None);
 
         Ok(Self {
@@ -80,8 +81,8 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for CodeAgent<M> 
     fn model(&self) -> &dyn Model {
         self.base_agent.model()
     }
-    async fn step(&mut self, log_entry: &mut Step) -> Result<Option<String>> {
-        match log_entry {
+    async fn step(&mut self, log_entry: &mut Step) -> Result<Option<AgentStep>> {
+        let step_result = match log_entry {
             Step::ActionStep(step_log) => {
                 let agent_memory = self.base_agent.write_inner_memory_from_logs(None)?;
                 self.base_agent.input_messages = Some(agent_memory.clone());
@@ -105,13 +106,13 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for CodeAgent<M> 
                     Err(e) => {
                         step_log.error = Some(e.clone());
                         info!("Error: {}", response + "\n" + &e.to_string());
-                        return Ok(None);
+                        return Ok(Some(step_log.clone()));
                     }
                 };
 
                 info!("Code: {}", code);
                 step_log.tool_call = Some(vec![ToolCall {
-                    id: Some(0.to_string()),
+                    id: Some(format!("call_{}", nanoid::nanoid!())),
                     call_type: Some("function".to_string()),
                     function: FunctionCall {
                         name: "python_interpreter".to_string(),
@@ -134,7 +135,7 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for CodeAgent<M> 
                             observation = observation.chars().take(30000).collect::<String>();
                             observation = format!("{} \n....This content has been truncated due to the 30000 character limit.....", observation);
                         } else {
-                            observation = format!("Observation: {}", observation);
+                            observation = format!("{}", observation);
                         }
                         info!("Observation: {}", observation);
 
@@ -142,23 +143,29 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for CodeAgent<M> 
                     }
                     Err(e) => match e {
                         InterpreterError::FinalAnswer(answer) => {
-                            return Ok(Some(answer));
+                            step_log.final_answer = Some(answer.clone());
+                            step_log.observations = Some(vec![format!("Final answer: {}", answer)]);
+                            return Ok(Some(step_log.clone()));
                         }
                         _ => {
-                            step_log.error = Some(AgentError::Execution(e.to_string()));
+                            step_log.error = Some(AgentError::Execution(e.to_string()));     
                             info!("Error: {}", e);
                         }
                     },
                 }
+                step_log
+
             }
             _ => {
                 todo!()
             }
-        }
+        };
 
-        Ok(None)
+        Ok(Some(step_result.clone()))
     }
 }
+
+impl<M: Model + std::fmt::Debug + Send + Sync + 'static> AgentStream for  CodeAgent<M>{}
 
 #[cfg(feature = "code-agent")]
 pub fn parse_code_blobs(code_blob: &str) -> Result<String, AgentError> {

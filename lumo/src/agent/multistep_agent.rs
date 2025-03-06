@@ -12,6 +12,7 @@ use crate::tools::{FinalAnswerTool, ToolGroup, ToolInfo, AsyncTool};
 
 use super::agent_step::Step;
 use super::agent_trait::Agent;
+use super::AgentStep;
 
 
 const DEFAULT_TOOL_DESCRIPTION_TEMPLATE: &str = r#"
@@ -138,7 +139,7 @@ where
     /// Perform one step in the ReAct framework: the agent thinks, acts, and observes the result.
     ///
     /// Returns None if the step is not final.
-    async fn step(&mut self, _: &mut Step) -> Result<Option<String>> {
+    async fn step(&mut self, _: &mut Step) -> Result<Option<AgentStep>> {
         todo!()
     }
 
@@ -274,7 +275,7 @@ where
     ) -> Result<Self> {
         // Initialize logger
         let _ = log::set_logger(&LOGGER).map(|()| {
-            log::set_max_level(log::LevelFilter::Info);
+            log::set_max_level(log::LevelFilter::Error);
         });
 
         let name = "MultiStepAgent";

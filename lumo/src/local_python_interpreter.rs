@@ -311,7 +311,6 @@ fn setup_custom_tools(tools: &[Box<dyn AsyncTool>], runtime: &Runtime) -> HashMa
         let tool_name = tool.name().to_string();
         let tool_info = tool.tool_info();
         let runtime = runtime.handle().clone();
-        
         tools_map.insert(
             tool_name.clone(),
             PythonToolFunction {
@@ -478,6 +477,7 @@ fn evaluate_python_code(
     }
 }
 
+#[derive(Debug)]
 pub struct LocalPythonInterpreter {
     static_tools: HashMap<&'static str, &'static str>,
     custom_tools: Vec<Box<dyn AsyncTool>>,

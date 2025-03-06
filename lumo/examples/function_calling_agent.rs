@@ -16,8 +16,10 @@ async fn main() {
     );
     let mut agent = FunctionCallingAgent::new(model, tools, None, None, None, None).unwrap();
     let _result = agent
-        .run("Who has the most followers on Twitter?", false)
+        .run(
+            "Find where is eindhoven and then find the population of that country",
+            true,
+        )
         .await
         .unwrap();
-    println!("{}", _result);
 }

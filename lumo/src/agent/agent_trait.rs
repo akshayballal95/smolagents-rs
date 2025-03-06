@@ -1,10 +1,18 @@
 use std::pin::Pin;
 
-use crate::{agent::agent_step::AgentStep, models::{model_traits::Model, types::{Message, MessageRole}}};
-use anyhow::Result;
-use log::info;
-use async_trait::async_trait;
 use super::agent_step::Step;
+use crate::{
+    agent::agent_step::AgentStep,
+    models::{
+        model_traits::Model,
+        types::{Message, MessageRole},
+    },
+};
+use anyhow::Result;
+use async_stream;
+use async_trait::async_trait;
+use futures::Stream;
+use log::info;
 
 #[async_trait]
 pub trait Agent: Send + Sync {
@@ -20,15 +28,20 @@ pub trait Agent: Send + Sync {
         "".to_string()
     }
     fn model(&self) -> &dyn Model;
-    async fn step(&mut self, log_entry: &mut Step) -> Result<Option<String>>;
-    
+    async fn step(&mut self, log_entry: &mut Step) -> Result<Option<AgentStep>>;
+
     async fn direct_run(&mut self, task: &str) -> Result<String> {
         let mut final_answer: Option<String> = None;
         while final_answer.is_none() && self.get_step_number() < self.get_max_steps() {
             println!("Step number: {:?}", self.get_step_number());
             let mut step_log = Step::ActionStep(AgentStep::new(self.get_step_number()));
 
-            final_answer = self.step(&mut step_log).await?;
+            if let Some(step) = self.step(&mut step_log).await? {
+                final_answer = match step.final_answer {
+                    Some(answer) => Some(answer),
+                    None => None,
+                };
+            }
             self.get_logs_mut().push(step_log);
             self.increment_step_number();
         }
@@ -64,7 +77,7 @@ pub trait Agent: Send + Sync {
 
         self.direct_run(task).await
     }
-    
+
     async fn provide_final_answer(&mut self, task: &str) -> Result<Option<String>> {
         let mut input_messages = vec![Message {
             role: MessageRole::System,
@@ -181,3 +194,54 @@ pub trait Agent: Send + Sync {
     }
 }
 
+pub trait AgentStream: Agent {
+    fn stream_run<'a>(
+        &'a mut self,
+        task: &'a str,
+        reset: bool,
+    ) -> Result<Pin<Box<dyn Stream<Item = AgentStep> + 'a>>> {
+        let system_prompt_step = Step::SystemPromptStep(self.get_system_prompt().to_string());
+        if reset {
+            self.get_logs_mut().clear();
+            self.get_logs_mut().push(system_prompt_step);
+            self.reset_step_number();
+        } else if self.get_logs_mut().is_empty() {
+            self.get_logs_mut().push(system_prompt_step);
+            self.reset_step_number();
+        } else {
+            self.get_logs_mut()[0] = system_prompt_step;
+            self.reset_step_number();
+        }
+        self.get_logs_mut().push(Step::TaskStep(task.to_string()));
+
+        let mut final_answer: Option<String> = None;
+
+        let stream = async_stream::stream! {
+            while final_answer.is_none() && self.get_step_number() < self.get_max_steps() {
+                let mut step_log = Step::ActionStep(AgentStep::new(self.get_step_number()));
+
+                if let Ok(Some(step)) = self.step(&mut step_log).await {
+                    self.get_logs_mut().push(step_log);
+                    self.increment_step_number();
+                    if let Some(answer) = step.final_answer.clone() {
+                        final_answer = Some(answer);
+                    }
+
+                    yield step;
+                }
+            }
+
+            if final_answer.is_none() && self.get_step_number() >= self.get_max_steps() {
+                if let Ok(Some(answer)) = self.provide_final_answer(task).await {
+                    yield AgentStep {
+                        final_answer: Some(answer),
+                        ..Default::default()
+                    };
+                }
+            }
+
+        };
+
+        Ok(Box::pin(stream))
+    }
+}

@@ -1,7 +1,9 @@
 //! This module contains the Python interpreter tool. The model uses this tool to evaluate python code.
 use async_trait::async_trait;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use std::mem::ManuallyDrop;
+use std::sync::{Arc, RwLock};
 
 use super::base::BaseTool;
 use super::tool_traits::Tool;
@@ -19,9 +21,10 @@ pub struct PythonInterpreterToolParams {
     )]
     code: String,
 }
-#[derive(Debug, Serialize, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct PythonInterpreterTool {
     pub tool: BaseTool,
+    pub interpreter: Arc<RwLock<ManuallyDrop<LocalPythonInterpreter>>>,
 }
 
 impl PythonInterpreterTool {
@@ -30,7 +33,9 @@ impl PythonInterpreterTool {
             tool: BaseTool {
                 name: "python_interpreter",
                 description:  "This is a tool that evaluates python code. It can be used to perform calculations. Make sure to print the result using print()."
-            }}
+            },
+            interpreter: Arc::new(RwLock::new(ManuallyDrop::new(LocalPythonInterpreter::new(&[], None)))),
+        }
     }
 }
 
@@ -44,8 +49,8 @@ impl Tool for PythonInterpreterTool {
         self.tool.description
     }
     async fn forward(&self, arguments: PythonInterpreterToolParams) -> Result<String> {
-        let mut interpreter = LocalPythonInterpreter::new(&[], None);
-        let result = interpreter.forward(&arguments.code);
+
+        let result = self.interpreter.write().unwrap().forward(&arguments.code);
         match result {
             Ok(result) => {
                 if result.1.is_empty() {
@@ -54,9 +59,7 @@ impl Tool for PythonInterpreterTool {
                     Ok(format!("Evaluation Result: {}", result.1))
                 }
             }
-            Err(e) => {
-                Err(anyhow::anyhow!("Error evaluating code: {}", e))
-            }
+            Err(e) => Err(anyhow::anyhow!("Error evaluating code: {}", e)),
         }
     }
 }

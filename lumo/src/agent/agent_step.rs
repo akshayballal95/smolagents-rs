@@ -25,7 +25,7 @@ impl std::fmt::Display for Step {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct AgentStep {
     pub agent_memory: Option<Vec<Message>>,
     pub llm_output: Option<String>,
@@ -33,7 +33,7 @@ pub struct AgentStep {
     pub error: Option<AgentError>,
     pub observations: Option<Vec<String>>,
     pub final_answer: Option<String>,
-    pub _step: usize,
+    pub step: usize,
 }
 
 impl AgentStep {
@@ -45,7 +45,7 @@ impl AgentStep {
             error: None,
             observations: None,
             final_answer: None,
-            _step: step,
+            step: step,
         }
     }
 }

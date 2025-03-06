@@ -15,7 +15,7 @@ use crate::{
     tools::{AsyncTool, ToolGroup},
 };
 
-use super::{agent_step::Step, multistep_agent::MultiStepAgent};
+use super::{agent_step::Step, multistep_agent::MultiStepAgent, AgentStep, AgentStream};
 
 pub struct FunctionCallingAgent<M>
 where
@@ -79,7 +79,7 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for FunctionCalli
     /// Perform one step in the ReAct framework: the agent thinks, acts, and observes the result.
     ///
     /// Returns None if the step is not final.
-    async fn step(&mut self, log_entry: &mut Step) -> Result<Option<String>> {
+    async fn step(&mut self, log_entry: &mut Step) -> Result<Option<AgentStep>> {
         match log_entry {
             Step::ActionStep(step_log) => {
                 let agent_memory = self.base_agent.write_inner_memory_from_logs(None)?;
@@ -132,7 +132,7 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for FunctionCalli
                         self.base_agent.write_inner_memory_from_logs(None)?;
                         step_log.final_answer = Some(response.clone());
                         step_log.observations = Some(vec![response.clone()]);
-                        return Ok(Some(response));
+                        return Ok(Some(step_log.clone()));
                     }
                 }
                 if tools.is_empty() {
@@ -144,7 +144,6 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for FunctionCalli
                         let function_name = tool.function.name.clone();
                         match function_name.as_str() {
                             "final_answer" => {
-                                info!("Executing tool call: {}", function_name);
                                 let answer = tools_ref.call(&tool.function).await?;
                                 Ok::<_, AgentExecutionError>((true, function_name, answer))
                             }
@@ -176,7 +175,7 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for FunctionCalli
                                 if is_final {
                                     step_log.final_answer = Some(output.clone());
                                     step_log.observations = Some(vec![output.clone()]);
-                                    return Ok(Some(output));
+                                    return Ok(Some(step_log.clone()));
                                 } else {
                                     let output_clone = output.clone();
                                     observations.push(output);
@@ -213,7 +212,7 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for FunctionCalli
                         step_log.observations.clone().unwrap_or_default().join("\n")
                     );
                 }
-                Ok(None)
+                Ok(Some(step_log.clone()))
             }
             _ => {
                 todo!()
@@ -244,3 +243,5 @@ pub fn parse_response(response: &str) -> Result<serde_json::Value, AgentError> {
         ))
     }
 }
+
+impl<M: Model + std::fmt::Debug + Send + Sync + 'static> AgentStream for FunctionCallingAgent<M>{}

@@ -2,14 +2,15 @@ use anyhow::Result;
 use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
 use colored::*;
-use lumo::agent::{Agent, CodeAgent, FunctionCallingAgent};
-use lumo::agent::{McpAgent, Step};
+use futures::{Stream, StreamExt};
+use lumo::agent::{AgentStep, AgentStream, CodeAgent, FunctionCallingAgent};
+use lumo::agent::McpAgent;
 use lumo::errors::AgentError;
 use lumo::models::model_traits::{Model, ModelResponse};
 use lumo::models::ollama::{OllamaModel, OllamaModelBuilder};
 use lumo::models::openai::OpenAIServerModel;
 use lumo::models::types::Message;
-use lumo::tools::{AsyncTool, DuckDuckGoSearchTool, GoogleSearchTool, ToolInfo, VisitWebsiteTool};
+use lumo::tools::{AsyncTool, DuckDuckGoSearchTool, GoogleSearchTool, PythonInterpreterTool, ToolInfo, VisitWebsiteTool};
 use mcp_client::{
     ClientCapabilities, ClientInfo, McpClient, McpClientTrait, McpService, StdioTransport,
     Transport,
@@ -18,9 +19,9 @@ use mcp_core::protocol::JsonRpcMessage;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Write};
+use std::pin::Pin;
 use std::time::Duration;
 use tower::Service;
-
 mod config;
 use config::Servers;
 
@@ -36,6 +37,7 @@ enum ToolType {
     DuckDuckGo,
     VisitWebsite,
     GoogleSearchTool,
+    PythonInterpreter,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -70,18 +72,15 @@ where
     S::Future: Send,
     S::Error: Into<mcp_client::Error>,
 {
-    async fn run(&mut self, task: &str, reset: bool) -> Result<String> {
+    fn stream_run<'a>(
+        &'a mut self,
+        task: &'a str,
+        reset: bool,
+    ) -> Result<Pin<Box<dyn Stream<Item = AgentStep> + 'a>>> {
         match self {
-            AgentWrapper::FunctionCalling(agent) => agent.run(task, reset).await,
-            AgentWrapper::Code(agent) => agent.run(task, reset).await,
-            AgentWrapper::Mcp(agent) => agent.run(task, reset).await,
-        }
-    }
-    fn get_logs_mut(&mut self) -> &mut Vec<Step> {
-        match self {
-            AgentWrapper::FunctionCalling(agent) => agent.get_logs_mut(),
-            AgentWrapper::Code(agent) => agent.get_logs_mut(),
-            AgentWrapper::Mcp(agent) => agent.get_logs_mut(),
+            AgentWrapper::FunctionCalling(agent) => agent.stream_run(task, reset),
+            AgentWrapper::Code(agent) => agent.stream_run(task, reset),
+            AgentWrapper::Mcp(agent) => agent.stream_run(task, reset),
         }
     }
 }
@@ -143,6 +142,7 @@ fn create_tool(tool_type: &ToolType) -> Box<dyn AsyncTool> {
         ToolType::DuckDuckGo => Box::new(DuckDuckGoSearchTool::new()),
         ToolType::VisitWebsite => Box::new(VisitWebsiteTool::new()),
         ToolType::GoogleSearchTool => Box::new(GoogleSearchTool::new(None)),
+        ToolType::PythonInterpreter => Box::new(PythonInterpreterTool::new()),
     }
 }
 
@@ -237,7 +237,6 @@ async fn main() -> Result<()> {
 
                 clients.push(client);
             }
-            
 
             // Create MCP agent with all initialized clients
             AgentWrapper::Mcp(
@@ -249,7 +248,7 @@ async fn main() -> Result<()> {
     let mut file: File = File::create("logs.txt")?;
 
     loop {
-        print!("{}", "User: ".yellow().bold());
+        print!("{}", "🤖 User: ".bright_green().bold());
         io::stdout().flush()?;
 
         let mut task = String::new();
@@ -258,22 +257,102 @@ async fn main() -> Result<()> {
 
         // Exit if user enters empty line or Ctrl+D
         if task.is_empty() {
-            println!("Enter a task to execute");
+            println!("{}", "⚠️  Please enter a task to execute".yellow().italic());
             continue;
         }
         if task == "exit" {
+            println!("{}", "👋 Goodbye!".bright_blue().bold());
             break;
         }
 
         // Run the agent with the task from stdin
-        let _result = agent.run(task, false).await?;
-        // Get the last log entry and serialize it in a controlled way
+        let mut _result = agent.stream_run(task, false).unwrap();
+        while let Some(step) = _result.next().await {
+            // Log each step as it happens instead of at the end
+            serde_json::to_writer_pretty(&mut file, &step)?;
+            
+            println!("{} {}", "📍 Step:".bright_cyan().bold(), step.step);
+            if let Some(tool_call) = step.tool_call {
+                if tool_call[0].function.name != "python_interpreter" {
+                println!(
+                    "{} {}",
+                    "🔧 Executing:".bright_magenta().bold(),
+                    tool_call
+                        .iter()
+                        .map(|tool_call| {
+                            let args = tool_call.function.arguments.as_object().unwrap();
+                            let formatted_args = args
+                                .iter()
+                                .map(|(k, v)| format!(
+                                    "{}{}{}",
+                                    k.bright_cyan(),
+                                    ": ".bright_white(),
+                                    v.to_string().trim_matches('"').bright_yellow()
+                                ))
+                                .collect::<Vec<String>>()
+                                .join(", ");
+                            
+                            format!(
+                                "{} {{ {} }}",
+                                tool_call.function.name.bright_white().bold(),
+                                formatted_args
+                            )
+                        })
+                        .collect::<Vec<String>>()
+                        .join(" | "),
+                );
+            }
+                else {
+                    println!("{} {}", "🔧 Executing:".bright_magenta().bold(), tool_call[0].function.name.bright_white().bold());
 
-        let logs = agent.get_logs_mut();
-        for log in logs {
-            // Serialize to JSON with pretty printing
-            serde_json::to_writer_pretty(&mut file, &log)?;
+                    let code_string = tool_call[0].function.arguments["code"].as_str().unwrap();
+                    // Calculate max width from code lines
+                    let max_width = code_string.lines()
+                        .map(|line| line.chars().count())
+                        .max()
+                        .unwrap_or(0)
+                        .max(20);  // minimum width of 20
+                    let width = max_width + 4;  // add padding
+                    
+                    // Create dynamic border strings
+                    let horizontal = "─".repeat(width);
+                    let empty_line = format!("{}", " ".repeat(width));
+                    let title = " 📝 Python Code ";
+                    let title_padding = (width - title.chars().count()) / 2;
+                    let top_border = format!("┌{}{}{}┐", 
+                        "─".repeat(title_padding), 
+                        title,
+                        "─".repeat(width - title_padding - title.chars().count())
+                    );
+                    
+                    println!("\n{}", top_border.bright_yellow());
+                    println!("{}", empty_line);
+                    bat::PrettyPrinter::new()
+                        .input(bat::Input::from_bytes(code_string.as_bytes()))
+                        .language("Python")
+                        .wrapping_mode(bat::WrappingMode::Character)
+                        .print()
+                        .unwrap();
+                    println!("{}", empty_line);
+                    println!("{}", format!("└{}┘", horizontal).bright_yellow());
+                }
+            }
+            if let Some(error) = step.error {
+                println!("{} {}", "❌ Error:".bright_red().bold(), error);
+            }
+            if let Some(answer) = step.final_answer {
+                println!("\n{}", "✨ Final Answer:".bright_blue().bold());
+
+                bat::PrettyPrinter::new()
+                    .input(bat::Input::from_bytes(answer.as_bytes()))
+                    .language("Markdown")
+                    .wrapping_mode(bat::WrappingMode::NoWrapping(true))
+                    .print()
+                    .unwrap();
+                println!("\n");
+            }
         }
     }
+
     Ok(())
 }

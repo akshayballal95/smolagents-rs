@@ -29,6 +29,8 @@ async-trait = "0.1.77"
 futures = "0.3"
 clap = { version = "4.5.1", features = ["derive"] }
 textwrap = "0.16.0"
+bat = "0.25.0"
+nanoid = "0.4.0"
 
 # mcp
 mcp-client = {git = "https://github.com/modelcontextprotocol/rust-sdk"}

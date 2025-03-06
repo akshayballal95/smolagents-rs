@@ -7,7 +7,7 @@ filesystem:
   command: npx
   args:
     - "@modelcontextprotocol/server-filesystem"
-    - "/home/projects/mcp_test"
+    - "/home/akshay/projects/mcp_test"
   env: null
 
 

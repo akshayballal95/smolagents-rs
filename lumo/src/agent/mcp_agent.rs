@@ -13,7 +13,7 @@ use mcp_client::{Error, McpClient, McpClientTrait};
 use mcp_core::{protocol::JsonRpcMessage, Content, Tool};
 use tower::Service;
 
-use super::{Agent, MultiStepAgent, Step};
+use super::{Agent, AgentStep, AgentStream, MultiStepAgent, Step};
 
 fn initialize_system_prompt(system_prompt: String, tools: Vec<Tool>) -> Result<String> {
     let tool_names = tools
@@ -141,7 +141,7 @@ where
     fn model(&self) -> &dyn Model {
         self.base_agent.model()
     }
-    async fn step(&mut self, log_entry: &mut Step) -> Result<Option<String>> {
+    async fn step(&mut self, log_entry: &mut Step) -> Result<Option<AgentStep>> {
         match log_entry {
             Step::ActionStep(step_log) => {
                 let agent_memory = self.base_agent.write_inner_memory_from_logs(None)?;
@@ -190,7 +190,9 @@ where
 
                 if let Ok(response) = model_message.get_response() {
                     if tools.is_empty() {
-                        return Ok(Some(response));
+                        step_log.observations = Some(vec![response.clone()]);
+                        step_log.final_answer = Some(response.clone());
+                        return Ok(Some(step_log.clone()));
                     }
                 }
 
@@ -203,7 +205,7 @@ where
                             let answer = self.base_agent.tools.call(&tool.function).await?;
                             step_log.observations = Some(vec![answer.clone()]);
                             step_log.final_answer = Some(answer.clone());
-                            return Ok(Some(answer));
+                            return Ok(Some(step_log.clone()));
                         }
                         _ => {
                             info!(
@@ -265,7 +267,7 @@ where
                         step_log.observations.clone().unwrap_or_default().join("\n")
                     );
                 }
-                Ok(None)
+                Ok(Some(step_log.clone()))
             }
             _ => {
                 todo!()
@@ -273,3 +275,11 @@ where
         }
     }
 }
+
+impl<M, S> AgentStream for  McpAgent<M, S>
+where
+    M: Model + std::fmt::Debug + Send + Sync,
+    S: Service<JsonRpcMessage, Response = JsonRpcMessage> + Clone + Send + Sync + 'static,
+    S::Error: Into<Error>,
+    S::Future: Send,
+{}
