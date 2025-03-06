@@ -141,57 +141,8 @@ where
     async fn step(&mut self, _: &mut Step) -> Result<Option<String>> {
         todo!()
     }
+
     
-    
-    async fn direct_run(&mut self, _task: &str) -> anyhow::Result<String> {
-        let mut final_answer: Option<String> = None;
-        println!("direct_run");
-        while final_answer.is_none() && self.get_step_number() < self.get_max_steps() {
-            std::println!("Step number: {:?}", self.get_step_number());
-            let mut step_log = Step::ActionStep(super::agent_step::AgentStep::new(self.get_step_number()));
-    
-            final_answer = self.step(&mut step_log).await?;
-            println!("final_answer: {:?}", final_answer);
-            self.get_logs_mut().push(step_log);
-            self.increment_step_number();
-        }
-    
-        if final_answer.is_none() && self.get_step_number() >= self.get_max_steps() {
-            final_answer = self.provide_final_answer(_task).await?;
-        }
-        log::info!(
-            "Final answer: {}",
-            final_answer
-                .clone()
-                .unwrap_or("Could not find answer".to_string())
-        );
-        Ok(final_answer.unwrap_or_else(|| "Max steps reached without final answer".to_string()))
-    }
-    
-    async fn stream_run(&mut self, _task: &str) -> anyhow::Result<String> {
-        std::todo!()
-    }
-    
-    async fn run(&mut self, task: &str, stream: bool, reset: bool) -> anyhow::Result<String> {
-        // self.task = task.to_string();
-        self.set_task(task);
-    
-        let system_prompt_step = Step::SystemPromptStep(self.get_system_prompt().to_string());
-        if reset {
-            self.get_logs_mut().clear();
-            self.get_logs_mut().push(system_prompt_step);
-            self.reset_step_number();
-        } else if self.get_logs_mut().is_empty() {
-            self.get_logs_mut().push(system_prompt_step);
-        } else {
-            self.get_logs_mut()[0] = system_prompt_step;
-        }
-        self.get_logs_mut().push(Step::TaskStep(task.to_string()));
-        match stream {
-            true => self.stream_run(task).await,
-            false => self.direct_run(task).await,
-        }
-    }
     
     async fn provide_final_answer(&mut self, task: &str) -> anyhow::Result<Option<String>> {
         let mut input_messages = std::vec![Message {
@@ -323,7 +274,7 @@ where
     ) -> Result<Self> {
         // Initialize logger
         let _ = log::set_logger(&LOGGER).map(|()| {
-            log::set_max_level(log::LevelFilter::Error);
+            log::set_max_level(log::LevelFilter::Info);
         });
 
         let name = "MultiStepAgent";
@@ -469,4 +420,6 @@ where
         }
         Ok(())
     }
+
+    
 }

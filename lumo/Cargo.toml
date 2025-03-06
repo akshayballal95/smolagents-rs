@@ -41,7 +41,7 @@ required-features = ["cli", "code-agent"]
 
 
 [features]
-default = []
+default = ["all"]
 cli = ["dep:clap"]
 mcp = ["dep:mcp-client", "dep:mcp-core", "dep:tower" ]
 code-agent = ["dep:rustpython-parser", "dep:pyo3", "dep:tokio"]

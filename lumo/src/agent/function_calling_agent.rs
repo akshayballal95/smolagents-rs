@@ -130,6 +130,8 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for FunctionCalli
                     }
                     if tools.is_empty() {
                         self.base_agent.write_inner_memory_from_logs(None)?;
+                        step_log.final_answer = Some(response.clone());
+                        step_log.observations = Some(vec![response.clone()]);
                         return Ok(Some(response));
                     }
                 }
@@ -172,6 +174,8 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for FunctionCalli
                         match result {
                             Ok((is_final, name, output)) => {
                                 if is_final {
+                                    step_log.final_answer = Some(output.clone());
+                                    step_log.observations = Some(vec![output.clone()]);
                                     return Ok(Some(output));
                                 } else {
                                     let output_clone = output.clone();

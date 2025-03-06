@@ -49,10 +49,10 @@ enum AgentWrapper {
 }
 
 impl AgentWrapper {
-    async fn run(&mut self, task: &str, stream: bool, reset: bool) -> Result<String> {
+    async fn run(&mut self, task: &str, reset: bool) -> Result<String> {
         match self {
-            AgentWrapper::FunctionCalling(agent) => agent.run(task, stream, reset).await,
-            AgentWrapper::Code(agent) => agent.run(task, stream, reset).await,
+            AgentWrapper::FunctionCalling(agent) => agent.run(task, reset).await,
+            AgentWrapper::Code(agent) => agent.run(task, reset).await,
         }
     }
     fn get_logs_mut(&mut self) -> &mut Vec<Step> {
@@ -101,10 +101,6 @@ struct Args {
     /// Model ID (e.g., "gpt-4" for OpenAI or "qwen2.5" for Ollama)
     #[arg(long, default_value = "gpt-4o-mini")]
     model_id: String,
-
-    /// Whether to stream the output
-    #[arg(short, long, default_value = "false")]
-    stream: bool,
 
     /// Whether to reset the agent
     #[arg(short, long, default_value = "false")]
@@ -177,7 +173,7 @@ async fn main() -> Result<()> {
     };
 
     // Run the agent with the task from stdin
-    let _result = agent.run(&args.task, args.stream, args.reset).await?;
+    let _result = agent.run(&args.task, args.reset).await?;
     let logs = agent.get_logs_mut();
 
     // store logs in a file

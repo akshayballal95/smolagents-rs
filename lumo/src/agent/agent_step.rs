@@ -32,6 +32,7 @@ pub struct AgentStep {
     pub tool_call: Option<Vec<ToolCall>>,
     pub error: Option<AgentError>,
     pub observations: Option<Vec<String>>,
+    pub final_answer: Option<String>,
     pub _step: usize,
 }
 
@@ -43,6 +44,7 @@ impl AgentStep {
             tool_call: None,
             error: None,
             observations: None,
+            final_answer: None,
             _step: step,
         }
     }

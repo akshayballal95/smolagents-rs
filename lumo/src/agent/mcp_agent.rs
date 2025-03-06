@@ -202,6 +202,7 @@ where
                             info!("Executing tool call: {}", function_name);
                             let answer = self.base_agent.tools.call(&tool.function).await?;
                             step_log.observations = Some(vec![answer.clone()]);
+                            step_log.final_answer = Some(answer.clone());
                             return Ok(Some(answer));
                         }
                         _ => {

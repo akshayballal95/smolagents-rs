@@ -16,7 +16,7 @@ async fn main() {
     );
     let mut agent = FunctionCallingAgent::new(model, tools, None, None, None, None).unwrap();
     let _result = agent
-        .run("Who has the most followers on Twitter?", false, false)
+        .run("Who has the most followers on Twitter?", false)
         .await
         .unwrap();
     println!("{}", _result);

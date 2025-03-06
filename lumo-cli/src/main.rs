@@ -70,11 +70,11 @@ where
     S::Future: Send,
     S::Error: Into<mcp_client::Error>,
 {
-    async fn run(&mut self, task: &str, stream: bool, reset: bool) -> Result<String> {
+    async fn run(&mut self, task: &str, reset: bool) -> Result<String> {
         match self {
-            AgentWrapper::FunctionCalling(agent) => agent.run(task, stream, reset).await,
-            AgentWrapper::Code(agent) => agent.run(task, stream, reset).await,
-            AgentWrapper::Mcp(agent) => agent.run(task, stream, reset).await,
+            AgentWrapper::FunctionCalling(agent) => agent.run(task, reset).await,
+            AgentWrapper::Code(agent) => agent.run(task, reset).await,
+            AgentWrapper::Mcp(agent) => agent.run(task, reset).await,
         }
     }
     fn get_logs_mut(&mut self) -> &mut Vec<Step> {
@@ -128,10 +128,6 @@ struct Args {
     /// Model ID (e.g., "gpt-4" for OpenAI or "qwen2.5" for Ollama)
     #[arg(long, default_value = "gpt-4o-mini")]
     model_id: String,
-
-    /// Whether to stream the output
-    #[arg(short, long, default_value = "false")]
-    stream: bool,
 
     /// Base URL for the API
     #[arg(short, long)]
@@ -270,7 +266,7 @@ async fn main() -> Result<()> {
         }
 
         // Run the agent with the task from stdin
-        let _result = agent.run(task, args.stream, true).await?;
+        let _result = agent.run(task, false).await?;
         // Get the last log entry and serialize it in a controlled way
 
         let logs = agent.get_logs_mut();

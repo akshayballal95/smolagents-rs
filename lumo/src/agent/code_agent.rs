@@ -21,7 +21,7 @@ pub struct CodeAgent<M: Model> {
 }
 
 #[cfg(feature = "code-agent")]
-impl<M: Model> CodeAgent<M> {
+impl<M: Model + std::fmt::Debug + Send + Sync + 'static> CodeAgent<M> {
     pub fn new(
         model: M,
         tools: Vec<Box<dyn AsyncTool>>,
@@ -47,6 +47,7 @@ impl<M: Model> CodeAgent<M> {
             local_python_interpreter,
         })
     }
+    
 }
 
 #[cfg(feature = "code-agent")]

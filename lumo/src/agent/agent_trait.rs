@@ -1,3 +1,5 @@
+use std::pin::Pin;
+
 use crate::{agent::agent_step::AgentStep, models::{model_traits::Model, types::{Message, MessageRole}}};
 use anyhow::Result;
 use log::info;
@@ -20,7 +22,7 @@ pub trait Agent: Send + Sync {
     fn model(&self) -> &dyn Model;
     async fn step(&mut self, log_entry: &mut Step) -> Result<Option<String>>;
     
-    async fn direct_run(&mut self, _task: &str) -> Result<String> {
+    async fn direct_run(&mut self, task: &str) -> Result<String> {
         let mut final_answer: Option<String> = None;
         while final_answer.is_none() && self.get_step_number() < self.get_max_steps() {
             println!("Step number: {:?}", self.get_step_number());
@@ -32,7 +34,7 @@ pub trait Agent: Send + Sync {
         }
 
         if final_answer.is_none() && self.get_step_number() >= self.get_max_steps() {
-            final_answer = self.provide_final_answer(_task).await?;
+            final_answer = self.provide_final_answer(task).await?;
         }
         info!(
             "Final answer: {}",
@@ -43,11 +45,7 @@ pub trait Agent: Send + Sync {
         Ok(final_answer.unwrap_or_else(|| "Max steps reached without final answer".to_string()))
     }
 
-    async fn stream_run(&mut self, _task: &str) -> Result<String> {
-        todo!()
-    }
-
-    async fn run(&mut self, task: &str, stream: bool, reset: bool) -> Result<String> {
+    async fn run(&mut self, task: &str, reset: bool) -> Result<String> {
         self.set_task(task);
 
         let system_prompt_step = Step::SystemPromptStep(self.get_system_prompt().to_string());
@@ -63,10 +61,8 @@ pub trait Agent: Send + Sync {
             self.reset_step_number();
         }
         self.get_logs_mut().push(Step::TaskStep(task.to_string()));
-        match stream {
-            true => self.stream_run(task).await,
-            false => self.direct_run(task).await,
-        }
+
+        self.direct_run(task).await
     }
     
     async fn provide_final_answer(&mut self, task: &str) -> Result<Option<String>> {
@@ -184,3 +180,4 @@ pub trait Agent: Send + Sync {
         Ok(memory)
     }
 }
+
