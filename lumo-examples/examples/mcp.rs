@@ -60,10 +60,11 @@ async fn main() -> Result<(), ClientError> {
         None,
         None,
         vec![client],
-        )
-        .await
-        .unwrap();
-        // Use agent here
+        None,
+    )
+    .await
+    .unwrap();
+    // Use agent here
     let _result = agent.run("List the directories in the current directory!", false).await.unwrap();
 
     Ok(())

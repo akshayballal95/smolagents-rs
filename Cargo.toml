@@ -35,6 +35,7 @@ async-stream = "0.3.6"
 rustyline = "15.0.0"
 serde_yaml = "0.9.33"
 directories = "6.0.0"
+strip-ansi-escapes = "0.2.0"
 
 # mcp
 mcp-client = {git = "https://github.com/modelcontextprotocol/rust-sdk"}

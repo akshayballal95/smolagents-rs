@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::{errors::AgentError, models::{openai::ToolCall, types::Message}};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub enum Step {
     PlanningStep(String, String),
     TaskStep(String),

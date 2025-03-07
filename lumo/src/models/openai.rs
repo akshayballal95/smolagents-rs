@@ -143,7 +143,7 @@ impl OpenAIServerModel {
             base_url: base_url.to_string(),
             model_id,
             client,
-            temperature: temperature.unwrap_or(0.2),
+            temperature: temperature.unwrap_or(0.5),
             api_key,
         }
     }
@@ -159,15 +159,6 @@ impl Model for OpenAIServerModel {
         args: Option<HashMap<String, Vec<String>>>,
     ) -> Result<Box<dyn ModelResponse>, AgentError> {
         let max_tokens = max_tokens.unwrap_or(4500);
-
-        // println!(
-        //     "messages: {}",
-        //     messages
-        //         .iter()
-        //         .map(|m| serde_json::to_string_pretty(m).unwrap())
-        //         .collect::<Vec<_>>()
-        //         .join("\n")
-        // );
         let mut body = json!({
             "model": self.model_id,
             "messages": messages,

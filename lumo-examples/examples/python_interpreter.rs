@@ -13,7 +13,7 @@ async fn main() {
         None,
         None,
     );
-    let mut agent = FunctionCallingAgent::new(model, tools, None, None, None, None).unwrap();
+    let mut agent = FunctionCallingAgent::new(model, tools, None, None, None, None, None).unwrap();
     let _result = agent
         .run(
             "What is 2 + 2?",

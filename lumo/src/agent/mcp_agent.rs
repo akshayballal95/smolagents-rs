@@ -80,6 +80,7 @@ where
         description: Option<&str>,
         max_steps: Option<usize>,
         mcp_clients: Vec<McpClient<S>>,
+        planning_interval: Option<usize>,
     ) -> Result<Self> {
         let system_prompt = match system_prompt {
             Some(prompt) => prompt.to_string(),
@@ -100,6 +101,7 @@ where
             managed_agents,
             Some(&description),
             max_steps,
+            planning_interval,
         )?;
         Ok(Self {
             base_agent,
@@ -135,6 +137,9 @@ where
     fn reset_step_number(&mut self) {
         self.base_agent.reset_step_number();
     }
+    fn set_step_number(&mut self, step_number: usize) {
+        self.base_agent.set_step_number(step_number)
+    }
     fn increment_step_number(&mut self) {
         self.base_agent.increment_step_number();
     }
@@ -143,6 +148,12 @@ where
     }
     fn model(&self) -> &dyn Model {
         self.base_agent.model()
+    }
+    fn get_planning_interval(&self) -> Option<usize> {
+        self.base_agent.get_planning_interval()
+    }
+    async fn planning_step(&mut self, task: &str, is_first_step: bool, step: usize) -> Result<Option<Step>> {
+        self.base_agent.planning_step(task, is_first_step, step).await
     }
     async fn step(&mut self, log_entry: &mut Step) -> Result<Option<AgentStep>> {
         match log_entry {

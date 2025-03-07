@@ -1,4 +1,3 @@
-
 use super::agent_step::Step;
 use crate::{
     agent::agent_step::AgentStep,
@@ -12,8 +11,7 @@ use async_trait::async_trait;
 use log::info;
 
 #[cfg(feature = "stream")]
-use {std::pin::Pin, futures::Stream};
-
+use {futures::Stream, std::pin::Pin};
 
 #[async_trait]
 pub trait Agent: Send + Sync {
@@ -21,10 +19,13 @@ pub trait Agent: Send + Sync {
     fn get_max_steps(&self) -> usize;
     fn get_step_number(&self) -> usize;
     fn reset_step_number(&mut self);
+    fn set_step_number(&mut self, step_number: usize);
     fn increment_step_number(&mut self);
     fn get_logs_mut(&mut self) -> &mut Vec<Step>;
     fn set_task(&mut self, task: &str);
     fn get_system_prompt(&self) -> &str;
+    fn get_planning_interval(&self) -> Option<usize>;
+    async fn planning_step(&mut self, task: &str, is_first_step: bool, step: usize) -> Result<Option<Step>>;
     fn description(&self) -> String {
         "".to_string()
     }
@@ -35,6 +36,12 @@ pub trait Agent: Send + Sync {
         let mut final_answer: Option<String> = None;
         while final_answer.is_none() && self.get_step_number() < self.get_max_steps() {
             let mut step_log = Step::ActionStep(AgentStep::new(self.get_step_number()));
+
+            if let Some(planning_interval) = self.get_planning_interval() {
+                if self.get_step_number() % planning_interval == 1 {
+                    self.planning_step(task, self.get_step_number() == 1, self.get_step_number()).await.unwrap();
+                }
+            }
 
             if let Some(step) = self.step(&mut step_log).await? {
                 final_answer = match step.final_answer {
@@ -60,7 +67,7 @@ pub trait Agent: Send + Sync {
 
     async fn run(&mut self, task: &str, reset: bool) -> Result<String> {
         self.set_task(task);
-
+        self.set_step_number(1);
         let system_prompt_step = Step::SystemPromptStep(self.get_system_prompt().to_string());
         if reset {
             self.get_logs_mut().clear();
@@ -74,6 +81,8 @@ pub trait Agent: Send + Sync {
             self.reset_step_number();
         }
         self.get_logs_mut().push(Step::TaskStep(task.to_string()));
+        self.set_step_number(1);
+
 
         self.direct_run(task).await
     }
@@ -146,8 +155,7 @@ pub trait Agent: Send + Sync {
                             role: MessageRole::Assistant,
                             content: step_log.llm_output.clone().unwrap_or_default(),
                             tool_call_id: None,
-                            // tool_calls: step_log.tool_call.clone(),
-                            tool_calls:None
+                            tool_calls: step_log.tool_call.clone(),
                         });
                     }
 
@@ -162,9 +170,9 @@ pub trait Agent: Send + Sync {
                             );
 
                             memory.push(Message {
-                                role: MessageRole::User,
+                                role: MessageRole::ToolResponse,
                                 content: message_content,
-                                tool_call_id: None,
+                                tool_call_id: tool_call.id.clone(),
                                 tool_calls: None,
                             });
                         }
@@ -201,7 +209,7 @@ pub trait AgentStream: Agent {
         &'a mut self,
         task: &'a str,
         reset: bool,
-    ) -> Result<Pin<Box<dyn Stream<Item = AgentStep> + 'a>>> {
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<Step>> + 'a>>> {
         let system_prompt_step = Step::SystemPromptStep(self.get_system_prompt().to_string());
         if reset {
             self.get_logs_mut().clear();
@@ -215,33 +223,56 @@ pub trait AgentStream: Agent {
             self.reset_step_number();
         }
         self.get_logs_mut().push(Step::TaskStep(task.to_string()));
+        self.set_step_number(1);
 
         let mut final_answer: Option<String> = None;
 
         let stream = async_stream::stream! {
             while final_answer.is_none() && self.get_step_number() < self.get_max_steps() {
                 let mut step_log = Step::ActionStep(AgentStep::new(self.get_step_number()));
-
-                if let Ok(Some(step)) = self.step(&mut step_log).await {
-                    self.get_logs_mut().push(step_log);
-                    self.increment_step_number();
-                    if let Some(answer) = step.final_answer.clone() {
-                        final_answer = Some(answer);
+                
+                if let Some(planning_interval) = self.get_planning_interval() {
+                    if self.get_step_number() % planning_interval == 1 {
+                        match self.planning_step(task, self.get_step_number() == 1, self.get_step_number()).await {
+                            Ok(Some(step)) => yield Ok(step),
+                            Ok(None) => {},
+                            Err(e) => {
+                                yield Err(e);
+                                break;
+                            }
+                        }
                     }
+                }
 
-                    yield step;
+                match self.step(&mut step_log).await {
+                    Ok(Some(step)) => {
+                        self.get_logs_mut().push(step_log.clone());
+                        self.increment_step_number();
+                        if let Some(answer) = step.final_answer.clone() {
+                            final_answer = Some(answer);
+                        }
+                        yield Ok(step_log);
+                    }
+                    Ok(None) => {},
+                    Err(e) => {
+                        yield Err(e);
+                        break;
+                    }
                 }
             }
 
             if final_answer.is_none() && self.get_step_number() >= self.get_max_steps() {
-                if let Ok(Some(answer)) = self.provide_final_answer(task).await {
-                    yield AgentStep {
-                        final_answer: Some(answer),
-                        ..Default::default()
-                    };
+                match self.provide_final_answer(task).await {
+                    Ok(Some(answer)) => {
+                        yield Ok(Step::ActionStep(AgentStep {
+                            final_answer: Some(answer),
+                            ..Default::default()
+                        }));
+                    }
+                    Ok(None) => {},
+                    Err(e) => yield Err(e),
                 }
             }
-
         };
 
         Ok(Box::pin(stream))

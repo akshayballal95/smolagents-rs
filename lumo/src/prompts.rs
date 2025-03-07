@@ -196,7 +196,7 @@ pub const SYSTEM_PROMPT_PLAN: &str = r#"You are a world expert at making efficie
 Now for the given task, develop a step-by-step high-level plan taking into account the above inputs and list of facts.
 This plan should involve individual tasks based on the available tools, that if executed correctly will yield the correct answer.
 Do not skip steps, do not add any superfluous steps. Only write the high-level plan, DO NOT DETAIL INDIVIDUAL TOOL CALLS.
-After writing the final step of the plan, write the '\n<end_plan>' tag and stop there."#;
+After writing the final step of the plan, write the '<end_plan>' tag and stop there."#;
 
 /// The user prompt for the plan agent. This prompt is used to develop a step-by-step high-level plan to solve a task.
 pub fn user_prompt_plan(

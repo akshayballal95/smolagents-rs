@@ -2,8 +2,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
 use futures::{Stream, StreamExt};
-use lumo::agent::McpAgent;
-use lumo::agent::{AgentStep, AgentStream, CodeAgent, FunctionCallingAgent};
+use lumo::agent::{McpAgent, Step};
+use lumo::agent::{AgentStream, CodeAgent, FunctionCallingAgent};
 use lumo::errors::AgentError;
 use lumo::models::model_traits::{Model, ModelResponse};
 use lumo::models::ollama::{OllamaModel, OllamaModelBuilder};
@@ -81,7 +81,7 @@ where
         &'a mut self,
         task: &'a str,
         reset: bool,
-    ) -> Result<Pin<Box<dyn Stream<Item = AgentStep> + 'a>>> {
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<Step, anyhow::Error>> + 'a>>> {
         match self {
             AgentWrapper::FunctionCalling(agent) => agent.stream_run(task, reset),
             AgentWrapper::Code(agent) => agent.stream_run(task, reset),
@@ -136,6 +136,10 @@ struct Args {
     /// Maximum number of steps to take
     #[arg(long, default_value = "10")]
     max_steps: Option<usize>,
+
+    /// Planning interval
+    #[arg(short = 'p', long)]
+    planning_interval: Option<usize>,
 }
 
 fn create_tool(tool_type: &ToolType) -> Box<dyn AsyncTool> {
@@ -198,6 +202,7 @@ async fn main() -> Result<()> {
             None,
             Some("CLI Agent"),
             args.max_steps,
+            args.planning_interval,
         )?),
         AgentType::Code => AgentWrapper::Code(CodeAgent::new(
             model,
@@ -206,6 +211,7 @@ async fn main() -> Result<()> {
             None,
             Some("CLI Agent"),
             args.max_steps,
+            args.planning_interval,
         )?),
         AgentType::Mcp => {
             // Initialize all configured servers
@@ -241,7 +247,7 @@ async fn main() -> Result<()> {
 
             // Create MCP agent with all initialized clients
             AgentWrapper::Mcp(
-                McpAgent::new(model, None, None, None, args.max_steps, clients).await?,
+                McpAgent::new(model, None, None, None, args.max_steps, clients, args.planning_interval).await?,
             )
         }
     };
@@ -263,8 +269,13 @@ async fn main() -> Result<()> {
 
         let mut result = agent.stream_run(&task, false)?;
         while let Some(step) = result.next().await {
-            serde_json::to_writer_pretty(&mut file, &step)?;
-            CliPrinter::print_step(&step)?;
+            if let Ok(step) = step {
+                serde_json::to_writer_pretty(&mut file, &step)?;
+                CliPrinter::print_step(&step)?;
+            }
+            else {
+                println!("Error: {:?}", step);
+            }
         }
     }
 

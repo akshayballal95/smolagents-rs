@@ -35,6 +35,7 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> FunctionCallingAgent<M>
         managed_agents: Option<HashMap<String, Box<dyn Agent>>>,
         description: Option<&str>,
         max_steps: Option<usize>,
+        planning_interval: Option<usize>,
     ) -> Result<Self> {
         let system_prompt = system_prompt.unwrap_or(TOOL_CALLING_SYSTEM_PROMPT);
         let base_agent = MultiStepAgent::new(
@@ -44,6 +45,7 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> FunctionCallingAgent<M>
             managed_agents,
             description,
             max_steps,
+            planning_interval,
         )?;
         Ok(Self { base_agent })
     }
@@ -60,11 +62,17 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for FunctionCalli
     fn get_system_prompt(&self) -> &str {
         self.base_agent.get_system_prompt()
     }
+    fn get_planning_interval(&self) -> Option<usize> {
+        self.base_agent.get_planning_interval()
+    }
     fn get_max_steps(&self) -> usize {
         self.base_agent.get_max_steps()
     }
     fn get_step_number(&self) -> usize {
         self.base_agent.get_step_number()
+    }
+    fn set_step_number(&mut self, step_number: usize) {
+        self.base_agent.set_step_number(step_number)
     }
     fn reset_step_number(&mut self) {
         self.base_agent.reset_step_number();
@@ -77,6 +85,9 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for FunctionCalli
     }
     fn model(&self) -> &dyn Model {
         self.base_agent.model()
+    }
+    async fn planning_step(&mut self, task: &str, is_first_step: bool, step: usize) -> Result<Option<Step>> {
+        self.base_agent.planning_step(task, is_first_step, step).await
     }
 
     /// Perform one step in the ReAct framework: the agent thinks, acts, and observes the result.

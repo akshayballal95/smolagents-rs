@@ -1,4 +1,4 @@
-use lumo::agent::{Agent, FunctionCallingAgent};
+use lumo::agent::{Agent, CodeAgent, FunctionCallingAgent};
 use lumo::models::openai::OpenAIServerModel;
 use lumo::tools::{AsyncTool, DuckDuckGoSearchTool, VisitWebsiteTool};
 
@@ -14,10 +14,10 @@ async fn main() {
         None,
         None,
     );
-    let mut agent = FunctionCallingAgent::new(model, tools, None, None, None, None).unwrap();
+    let mut agent = CodeAgent::new(model, tools, None, None, None, None, None).unwrap();
     let _result = agent
         .run(
-            "Find where is eindhoven and then find the population of that country",
+            "who is elon musk",
             true,
         )
         .await

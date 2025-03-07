@@ -102,6 +102,18 @@ impl log::Log for ColoredLogger {
                 )
                 .unwrap();
                 writeln!(stdout, "{}", bottom_border.yellow()).unwrap();
+            } else if msg.starts_with("Facts:") {
+                let (prefix, content) = msg.split_at(6);
+                writeln!(stdout, "{}", top_border.blue()).unwrap();
+                writeln!(
+                    stdout,
+                    "{}{}{}",
+                    side_border.blue(),
+                    prefix.blue().bold(),
+                    content.white().bold()
+                )
+                .unwrap();
+                writeln!(stdout, "{}", bottom_border.blue()).unwrap();
             } else {
                 writeln!(stdout, "{}", top_border.blue()).unwrap();
                 writeln!(stdout, "{}{}", side_border.blue(), msg.blue()).unwrap();

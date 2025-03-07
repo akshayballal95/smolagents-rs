@@ -161,6 +161,7 @@ async fn main() -> Result<()> {
             None,
             Some("CLI Agent"),
             args.max_steps,
+            None,
         )?),
         AgentType::Code => AgentWrapper::Code(CodeAgent::new(
             model,
@@ -168,6 +169,7 @@ async fn main() -> Result<()> {
             None,
             None,
             Some("CLI Agent"),
+            None,
             None,
         )?),
     };

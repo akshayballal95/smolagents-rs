@@ -1,12 +1,12 @@
 use anyhow::Result;
 use bat::PrettyPrinter;
 use colored::*;
-use lumo::agent::AgentStep;
-use rustyline::error::ReadlineError;
-use rustyline::{Editor, Config};
-use rustyline::history::FileHistory;
-use std::path::PathBuf;
 use directories::UserDirs;
+use lumo::agent::Step;
+use rustyline::error::ReadlineError;
+use rustyline::history::FileHistory;
+use rustyline::{Config, Editor};
+use std::path::PathBuf;
 
 pub struct CliPrinter {
     editor: Editor<(), FileHistory>,
@@ -18,9 +18,9 @@ impl CliPrinter {
             .history_ignore_space(true)
             .completion_type(rustyline::CompletionType::List)
             .build();
-            
+
         let mut editor = Editor::with_config(config)?;
-        
+
         // Create history file path in user's home directory
         let history_path = UserDirs::new()
             .map(|dirs| dirs.home_dir().join(".lumo_history"))
@@ -30,7 +30,7 @@ impl CliPrinter {
         if editor.load_history(&history_path).is_err() {
             editor.save_history(&history_path)?;
         }
-        
+
         Ok(Self { editor })
     }
 
@@ -53,9 +53,7 @@ impl CliPrinter {
                 println!("CTRL-D");
                 Ok("exit".to_string())
             }
-            Err(err) => {
-                Err(anyhow::anyhow!("Error: {:?}", err))
-            }
+            Err(err) => Err(anyhow::anyhow!("Error: {:?}", err)),
         }
     }
 
@@ -67,25 +65,46 @@ impl CliPrinter {
         println!("{}", "👋 Goodbye!".bright_blue().bold());
     }
 
-    pub fn print_step(step: &AgentStep) -> Result<()> {
-        println!("\n{} {}", "📍 Step:".bright_cyan().bold(), step.step);
-        
-        if let Some(tool_call) = &step.tool_call {
-            if !tool_call.is_empty() {
-                if tool_call[0].function.name != "python_interpreter" {
-                    Self::print_regular_tool_call(tool_call);
-                } else {
-                    Self::print_python_tool_call(tool_call);
+    pub fn print_step(step: &Step) -> Result<()> {
+        match step {
+            Step::ActionStep(action_step) => {
+                println!("\n{} {}", "📍 Step:".bright_cyan().bold(), action_step.step);
+                if let Some(tool_call) = &action_step.tool_call {
+                    if !tool_call.is_empty() {
+                        if tool_call[0].function.name != "python_interpreter" {
+                            Self::print_regular_tool_call(tool_call);
+                        } else {
+                            Self::print_python_tool_call(tool_call);
+                        }
+                    }
+                }
+
+                if let Some(error) = &action_step.error {
+                    println!("{} {}", "❌ Error:".bright_red().bold(), error);
+                }
+
+                if let Some(answer) = &action_step.final_answer {
+                    Self::print_final_answer(answer)?;
                 }
             }
-        }
+            Step::PlanningStep(plan, facts) => {
+                println!("\n{} {}", "📍 Step:".bright_cyan().bold(), "Planning");
+                println!("\n{}", "📝 Facts:".bright_blue().bold());
+                bat::PrettyPrinter::new()
+                    .input(bat::Input::from_bytes(facts.as_bytes()))
+                    .language("Markdown")
+                    .wrapping_mode(bat::WrappingMode::NoWrapping(true))
+                    .print()?;
+                println!("\n\n{}", "📝 Plan:".bright_blue().bold());
+                bat::PrettyPrinter::new()
+                    .input(bat::Input::from_bytes(plan.as_bytes()))
+                    .language("Markdown")
+                    .wrapping_mode(bat::WrappingMode::NoWrapping(true))
+                    .print()?;
 
-        if let Some(error) = &step.error {
-            println!("{} {}", "❌ Error:".bright_red().bold(), error);
-        }
-
-        if let Some(answer) = &step.final_answer {
-            Self::print_final_answer(answer)?;
+                println!("\n");
+            }
+            _ => {}
         }
 
         Ok(())
@@ -94,22 +113,24 @@ impl CliPrinter {
     fn print_regular_tool_call(tool_call: &[lumo::models::openai::ToolCall]) {
         println!(
             "{} {}",
-            "🔧 Executing:".bright_magenta().bold(),
+            "🔧 Executing Tools: \n".bright_magenta().bold(),
             tool_call
                 .iter()
                 .map(|tool_call| {
                     let args = tool_call.function.arguments.as_object().unwrap();
                     let formatted_args = args
                         .iter()
-                        .map(|(k, v)| format!(
-                            "{}{}{}",
-                            k.bright_cyan(),
-                            ": ".bright_white(),
-                            v.to_string().trim_matches('"').bright_yellow()
-                        ))
+                        .map(|(k, v)| {
+                            format!(
+                                "{}{}{}",
+                                k.bright_cyan(),
+                                ": ".bright_white(),
+                                v.to_string().trim_matches('"').bright_yellow()
+                            )
+                        })
                         .collect::<Vec<String>>()
                         .join(", ");
-                    
+
                     format!(
                         "{} {{ {} }}",
                         tool_call.function.name.bright_white().bold(),
@@ -117,13 +138,16 @@ impl CliPrinter {
                     )
                 })
                 .collect::<Vec<String>>()
-                .join(" | "),
+                .join("\n"),
         );
     }
 
     fn print_python_tool_call(tool_call: &[lumo::models::openai::ToolCall]) {
-        println!("{} {}", "🔧 Executing:".bright_magenta().bold(), 
-                tool_call[0].function.name.bright_white().bold());
+        println!(
+            "{} {}",
+            "🔧 Executing:".bright_magenta().bold(),
+            tool_call[0].function.name.bright_white().bold()
+        );
 
         let code_string = tool_call[0].function.arguments["code"].as_str().unwrap();
         Self::print_code_block(code_string);
@@ -131,24 +155,26 @@ impl CliPrinter {
 
     fn print_code_block(code_string: &str) {
         // Calculate max width from code lines
-        let max_width = code_string.lines()
+        let max_width = code_string
+            .lines()
             .map(|line| line.chars().count())
             .max()
             .unwrap_or(0)
-            .max(20);  // minimum width of 20
-        let width = max_width + 4;  // add padding
-        
+            .max(20); // minimum width of 20
+        let width = max_width + 4; // add padding
+
         // Create dynamic border strings
         let horizontal = "─".repeat(width);
         let empty_line = format!("{}", " ".repeat(width));
         let title = " 📝 Python Code ";
         let title_padding = (width - title.chars().count()) / 2;
-        let top_border = format!("┌{}{}{}┐", 
-            "─".repeat(title_padding), 
+        let top_border = format!(
+            "┌{}{}{}┐",
+            "─".repeat(title_padding),
             title,
             "─".repeat(width - title_padding - title.chars().count())
         );
-        
+
         println!("\n{}", top_border.bright_yellow());
         println!("{}", empty_line);
         PrettyPrinter::new()
@@ -171,4 +197,4 @@ impl CliPrinter {
         println!("\n");
         Ok(())
     }
-} 
+}

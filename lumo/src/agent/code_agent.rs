@@ -32,6 +32,7 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> CodeAgent<M> {
         managed_agents: Option<HashMap<String, Box<dyn Agent>>>,
         description: Option<&str>,
         max_steps: Option<usize>,
+        planning_interval: Option<usize>,
     ) -> Result<Self> {
         let system_prompt = system_prompt.unwrap_or(CODE_SYSTEM_PROMPT);
 
@@ -42,6 +43,7 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> CodeAgent<M> {
             managed_agents,
             description,
             max_steps,
+            planning_interval,
         )?;
         
         let local_python_interpreter = LocalPythonInterpreter::new(Some(&base_agent.tools), None);
@@ -66,6 +68,9 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for CodeAgent<M> 
     fn get_step_number(&self) -> usize {
         self.base_agent.get_step_number()
     }
+    fn set_step_number(&mut self, step_number: usize) {
+        self.base_agent.set_step_number(step_number)
+    }
     fn increment_step_number(&mut self) {
         self.base_agent.increment_step_number()
     }
@@ -80,6 +85,12 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for CodeAgent<M> 
     }
     fn get_system_prompt(&self) -> &str {
         self.base_agent.get_system_prompt()
+    }
+    fn get_planning_interval(&self) -> Option<usize> {
+        self.base_agent.get_planning_interval()
+    }
+    async fn planning_step(&mut self, task: &str, is_first_step: bool, step: usize) -> Result<Option<Step>> {
+        self.base_agent.planning_step(task, is_first_step, step).await
     }
     fn model(&self) -> &dyn Model {
         self.base_agent.model()

@@ -98,6 +98,7 @@ where
     pub task: String,
     pub input_messages: Option<Vec<Message>>,
     pub logs: Vec<Step>,
+    pub planning_interval: Option<usize>,
 }
 
 #[async_trait]
@@ -120,6 +121,12 @@ where
     fn get_system_prompt(&self) -> &str {
         &self.system_prompt_template
     }
+    fn get_planning_interval(&self) -> Option<usize> {
+        self.planning_interval
+    }
+    fn set_step_number(&mut self, step_number: usize) {
+        self.step_number = step_number;
+    }
     fn increment_step_number(&mut self) {
         self.step_number += 1;
     }
@@ -134,6 +141,9 @@ where
     }
     fn model(&self) -> &dyn Model {
         &self.model
+    }
+    async fn planning_step(&mut self, task: &str, is_first_step: bool, step: usize) -> Result<Option<Step>> {
+        self.planning_step(task, is_first_step, step).await
     }
 
     /// Perform one step in the ReAct framework: the agent thinks, acts, and observes the result.
@@ -167,98 +177,7 @@ where
             .get_response()?;
         Ok(Some(response))
     }
-    
-    fn write_inner_memory_from_logs(&mut self, summary_mode: Option<bool>) -> anyhow::Result<Vec<Message>> {
-        let mut memory = Vec::new();
-        let summary_mode = summary_mode.unwrap_or(false);
-        for log in self.get_logs_mut() {
-            match log {
-                Step::ToolCall(_) => {}
-                Step::PlanningStep(plan, facts) => {
-                    memory.push(Message {
-                        role: crate::models::types::MessageRole::Assistant,
-                        content: "[PLAN]:\n".to_owned() + plan.as_str(),
-                        tool_call_id: None,
-                        tool_calls: None,
-                    });
-    
-                    if !summary_mode {
-                        memory.push(Message {
-                            role: crate::models::types::MessageRole::Assistant,
-                            content: "[FACTS]:\n".to_owned() + facts.as_str(),
-                            tool_call_id: None,
-                            tool_calls: None,
-                        });
-                    }
-                }
-                Step::TaskStep(task) => {
-                    memory.push(Message {
-                        role: crate::models::types::MessageRole::User,
-                        content: "New Task: ".to_owned() + task.as_str(),
-                        tool_call_id: None,
-                        tool_calls: None,
-                    });
-                }
-                Step::SystemPromptStep(prompt) => {
-                    memory.push(Message {
-                        role: crate::models::types::MessageRole::System,
-                        content: prompt.to_string(),
-                        tool_call_id: None,
-                        tool_calls: None,
-                    });
-                }
-                Step::ActionStep(step_log) => {
-                    if step_log.llm_output.is_some() && !summary_mode {
-                        memory.push(Message {
-                            role: crate::models::types::MessageRole::Assistant,
-                            content: step_log.llm_output.clone().unwrap_or_default(),
-                            tool_call_id: None,
-                            tool_calls: step_log.tool_call.clone(),
-                        });
-                    }
-    
-                    if let (Some(tool_calls), Some(observations)) =
-                        (&step_log.tool_call, &step_log.observations)
-                    {
-                        for (i, tool_call) in tool_calls.iter().enumerate() {
-                            let message_content = std::format!(
-                                "Call id: {}\nObservation: {}",
-                                tool_call.id.as_deref().unwrap_or_default(),
-                                observations[i]
-                            );
-    
-                            memory.push(Message {
-                                role: crate::models::types::MessageRole::ToolResponse,
-                                content: message_content,
-                                tool_call_id: tool_call.id.clone(),
-                                tool_calls: None,
-                            });
-                        }
-                    } else if let Some(observations) = &step_log.observations {
-                        memory.push(Message {
-                            role: crate::models::types::MessageRole::User,
-                            content: std::format!("Observations: {}", observations.join("\n")),
-                            tool_call_id: None,
-                            tool_calls: None,
-                        });
-                    }
-                    if step_log.error.is_some() {
-                        let error_string =
-                            "Error: ".to_owned() + step_log.error.clone().unwrap().message(); // Its fine to unwrap because we check for None above
-    
-                        let error_string = error_string + "\nNow let's retry: take care not to repeat previous errors! If you have retried several times, try a completely different approach.\n";
-                        memory.push(Message {
-                            role: crate::models::types::MessageRole::User,
-                            content: error_string,
-                            tool_call_id: None,
-                            tool_calls: None,
-                        });
-                    }
-                }
-            }
-        }
-        Ok(memory)
-    }
+  
 }
 
 impl<M> MultiStepAgent<M>
@@ -272,6 +191,7 @@ where
         managed_agents: Option<HashMap<String, Box<dyn Agent>>>,
         description: Option<&str>,
         max_steps: Option<usize>,
+        planning_interval: Option<usize>,
     ) -> Result<Self> {
         // Initialize logger
         let _ = log::set_logger(&LOGGER).map(|()| {
@@ -304,6 +224,7 @@ where
             task: "".to_string(),
             logs: Vec::new(),
             input_messages: None,
+            planning_interval: planning_interval,
         };
 
         agent.initialize_system_prompt()?;
@@ -335,10 +256,10 @@ where
         Ok(self.system_prompt_template.clone())
     }
 
-    pub async fn planning_step(&mut self, task: &str, is_first_step: bool, _step: usize) -> Result<()> {
+    pub async fn planning_step(&mut self, task: &str, is_first_step: bool, _step: usize) -> Result<Option<Step>> {
         if is_first_step {
             let message_prompt_facts = Message {
-                role: MessageRole::System,
+                role: MessageRole::User,
                 content: SYSTEM_PROMPT_FACTS.to_string(),
                 tool_call_id: None,
                 tool_calls: None,
@@ -367,8 +288,9 @@ where
                 )
                 .await?
                 .get_response()?;
+            log::info!("Facts: {}", answer_facts);
             let message_system_prompt_plan = Message {
-                role: MessageRole::System,
+                role: MessageRole::User,
                 content: SYSTEM_PROMPT_PLAN.to_string(),
                 tool_call_id: None,
                 tool_calls: None,
@@ -402,7 +324,7 @@ where
                     None,
                     Some(HashMap::from([(
                         "stop".to_string(),
-                        vec!["Observation:".to_string()],
+                        vec!["Observation:".to_string(), "<end_plan>".to_string()],
                     )])),
                 )
                 .await?
@@ -415,11 +337,17 @@ where
                 format!("Here are the facts that I know so far: \n{}", answer_facts);
             self.logs.push(Step::PlanningStep(
                 final_plan_redaction.clone(),
-                final_facts_redaction,
+                final_facts_redaction.clone(),
             ));
             info!("Plan: {}", final_plan_redaction.blue().bold());
+            Ok(Some(Step::PlanningStep(
+                final_plan_redaction.clone(),
+                final_facts_redaction.clone(),
+            )))
+        } else {
+           Ok(None)
         }
-        Ok(())
+      
     }
 
     
