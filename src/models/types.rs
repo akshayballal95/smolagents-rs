@@ -1,15 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
+use super::openai::ToolCall;
+
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum MessageRole {
     User,
     Assistant,
     System,
-    #[serde(rename = "tool")]
+    #[serde(rename = "tool_calls")]
     ToolCall,
-    #[serde(rename = "tool_response")]
+    #[serde(rename = "tool")]
     ToolResponse,
 }
 
@@ -29,6 +31,11 @@ impl std::fmt::Display for MessageRole {
 pub struct Message {
     pub role: MessageRole,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+
 }
 
 impl std::fmt::Display for Message {

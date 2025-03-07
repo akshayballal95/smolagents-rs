@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use colored::*;
-use smolagents_rs::agents::Step;
-use smolagents_rs::agents::{Agent, CodeAgent, FunctionCallingAgent};
+use smolagents_rs::agent::Step;
+use smolagents_rs::agent::{Agent, CodeAgent, FunctionCallingAgent};
 use smolagents_rs::errors::AgentError;
 use smolagents_rs::models::model_traits::{Model, ModelResponse};
 use smolagents_rs::models::ollama::{OllamaModel, OllamaModelBuilder};
@@ -104,6 +104,10 @@ struct Args {
     /// Base URL for the API
     #[arg(short, long)]
     base_url: Option<String>,
+
+    /// Maximum number of steps to take
+    #[arg(long, default_value = "10")]
+    max_steps: Option<usize>,
 }
 
 fn create_tool(tool_type: &ToolType) -> Box<dyn AnyTool> {
@@ -131,6 +135,7 @@ fn main() -> Result<()> {
             OllamaModelBuilder::new()
                 .model_id(&args.model_id)
                 .ctx_length(8000)
+                .url(args.base_url.unwrap_or("http://localhost:11434".to_string()))
                 .build(),
         ),
     };
@@ -143,7 +148,7 @@ fn main() -> Result<()> {
             None,
             None,
             Some("CLI Agent"),
-            None,
+            args.max_steps,
         )?),
         AgentType::Code => AgentWrapper::Code(CodeAgent::new(
             model,
@@ -151,7 +156,7 @@ fn main() -> Result<()> {
             None,
             None,
             Some("CLI Agent"),
-            None,
+            args.max_steps,
         )?),
     };
 

@@ -10,7 +10,7 @@ use anyhow::Result;
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(title = "FinalAnswerToolParams")]
 pub struct FinalAnswerToolParams {
-    #[schemars(description = "The final answer to the problem")]
+    #[schemars(description = "The final answer to the task. Always use to give the final answer.")]
     answer: String,
 }
 
