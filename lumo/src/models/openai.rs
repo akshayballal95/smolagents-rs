@@ -43,7 +43,10 @@ pub struct ToolCall {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FunctionCall {
     pub name: String,
-    #[serde(deserialize_with = "deserialize_arguments", serialize_with = "serialize_arguments")]
+    #[serde(
+        deserialize_with = "deserialize_arguments",
+        serialize_with = "serialize_arguments"
+    )]
     pub arguments: Value,
 }
 
@@ -59,7 +62,10 @@ where
         // For objects and other types, serialize to a JSON string
         match serde_json::to_string(value) {
             Ok(json_str) => serializer.serialize_str(&json_str),
-            Err(e) => Err(serde::ser::Error::custom(format!("JSON serialization error: {}", e))),
+            Err(e) => Err(serde::ser::Error::custom(format!(
+                "JSON serialization error: {}",
+                e
+            ))),
         }
     }
 }
@@ -137,7 +143,7 @@ impl OpenAIServerModel {
             base_url: base_url.to_string(),
             model_id,
             client,
-            temperature: temperature.unwrap_or(0.5),
+            temperature: temperature.unwrap_or(0.2),
             api_key,
         }
     }
@@ -152,8 +158,16 @@ impl Model for OpenAIServerModel {
         max_tokens: Option<usize>,
         args: Option<HashMap<String, Vec<String>>>,
     ) -> Result<Box<dyn ModelResponse>, AgentError> {
-        let max_tokens = max_tokens.unwrap_or(1500);
+        let max_tokens = max_tokens.unwrap_or(4500);
 
+        // println!(
+        //     "messages: {}",
+        //     messages
+        //         .iter()
+        //         .map(|m| serde_json::to_string_pretty(m).unwrap())
+        //         .collect::<Vec<_>>()
+        //         .join("\n")
+        // );
         let mut body = json!({
             "model": self.model_id,
             "messages": messages,

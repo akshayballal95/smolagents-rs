@@ -146,7 +146,8 @@ pub trait Agent: Send + Sync {
                             role: MessageRole::Assistant,
                             content: step_log.llm_output.clone().unwrap_or_default(),
                             tool_call_id: None,
-                            tool_calls: step_log.tool_call.clone(),
+                            // tool_calls: step_log.tool_call.clone(),
+                            tool_calls:None
                         });
                     }
 
@@ -161,9 +162,9 @@ pub trait Agent: Send + Sync {
                             );
 
                             memory.push(Message {
-                                role: MessageRole::ToolResponse,
+                                role: MessageRole::User,
                                 content: message_content,
-                                tool_call_id: tool_call.id.clone(),
+                                tool_call_id: None,
                                 tool_calls: None,
                             });
                         }

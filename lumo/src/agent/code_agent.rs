@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, mem::ManuallyDrop};
 use anyhow::Result;
 use async_trait::async_trait;
 use log::info;
@@ -20,7 +20,7 @@ use super::agent_trait::AgentStream;
 #[cfg(feature = "code-agent")]
 pub struct CodeAgent<M: Model> {
     base_agent: MultiStepAgent<M>,
-    local_python_interpreter: LocalPythonInterpreter,
+    local_python_interpreter: ManuallyDrop<LocalPythonInterpreter>,
 }
 
 #[cfg(feature = "code-agent")]
@@ -48,7 +48,7 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> CodeAgent<M> {
 
         Ok(Self {
             base_agent,
-            local_python_interpreter,
+            local_python_interpreter: ManuallyDrop::new(local_python_interpreter),
         })
     }
     
