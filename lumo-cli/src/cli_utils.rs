@@ -35,7 +35,7 @@ impl CliPrinter {
     }
 
     pub fn prompt_user(&mut self) -> Result<String> {
-        match self.editor.readline(&"🤖 User: ".bright_green().bold().to_string()) {
+        match self.editor.readline("🤖> ") {
             Ok(line) => {
                 self.editor.add_history_entry(line.as_str())?;
                 // Use same history path as in new()
