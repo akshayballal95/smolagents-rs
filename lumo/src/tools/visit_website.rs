@@ -91,7 +91,6 @@ impl Tool for VisitWebsiteTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[tokio::test]
     async fn test_visit_website_tool() {
         let tool = VisitWebsiteTool::new();

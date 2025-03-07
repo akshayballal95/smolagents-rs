@@ -15,7 +15,10 @@ use crate::{
     tools::{AsyncTool, ToolGroup},
 };
 
-use super::{agent_step::Step, multistep_agent::MultiStepAgent, AgentStep, AgentStream};
+use super::{agent_step::Step, multistep_agent::MultiStepAgent, AgentStep};
+
+#[cfg(feature = "stream")]
+use super::agent_trait::AgentStream;
 
 pub struct FunctionCallingAgent<M>
 where
@@ -113,14 +116,14 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for FunctionCalli
                     if !response.trim().is_empty() {
                         if let Ok(action) = parse_response(&response) {
                             tools = vec![ToolCall {
-                                id: None,
+                                id: Some(format!("call_{}", nanoid::nanoid!())),
                                 call_type: Some("function".to_string()),
                                 function: FunctionCall {
-                                    name: action["tool_name"]
+                                    name: action["name"]
                                         .as_str()
                                         .unwrap_or_default()
                                         .to_string(),
-                                    arguments: action["tool_arguments"].clone(),
+                                    arguments: action["arguments"].clone(),
                                 },
                             }];
                             step_log.tool_call = Some(tools.clone());
@@ -222,14 +225,28 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for FunctionCalli
 }
 
 fn extract_action_json(text: &str) -> Option<String> {
+    // First try to extract from Action: format
     if let Some(action_part) = text.split("Action:").nth(1) {
-        // Trim whitespace and find the first '{' and last '}'
         let start = action_part.find('{');
         let end = action_part.rfind('}');
         if let (Some(start_idx), Some(end_idx)) = (start, end) {
-            return Some(action_part[start_idx..=end_idx].to_string());
+            let json_str = action_part[start_idx..=end_idx].to_string();
+            // Clean the string of control characters and normalize newlines
+            return Some(json_str.replace(|c: char| c.is_control() && c != '\n', "").replace("\n", "\\n"));
         }
     }
+    
+    // If no Action: format found, try extracting from tool_call tags
+    if let Some(tool_call_part) = text.split("<tool_call>").nth(1) {
+        if let Some(content) = tool_call_part.split("</tool_call>").next() {
+            let trimmed = content.trim();
+            if trimmed.starts_with('{') && trimmed.ends_with('}') {
+                // Clean the string of control characters and normalize newlines
+                return Some(trimmed.replace(|c: char| c.is_control() && c != '\n', "").replace("\n", "\\n"));
+            }
+        }
+    }
+    
     None
 }
 
@@ -244,4 +261,31 @@ pub fn parse_response(response: &str) -> Result<serde_json::Value, AgentError> {
     }
 }
 
+#[cfg(feature = "stream")]
 impl<M: Model + std::fmt::Debug + Send + Sync + 'static> AgentStream for FunctionCallingAgent<M>{}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_extract_action_json() {
+        let response = r#"<tool_call>
+{"name": "final_answer", "arguments": {"answer": "This is the final answer"}}
+</tool_call>"#;
+        let json_str = extract_action_json(response);
+        assert_eq!(json_str, Some("{\"name\": \"final_answer\", \"arguments\": {\"answer\": \"This is the final answer\"}}".to_string()));
+    }
+
+    #[test]
+    fn test_parse_response() {
+        let response = r#"<tool_call>
+{"name": "final_answer", "arguments": {"answer": "This is the 
+final answer"}}
+</tool_call>"#;
+        let json_str = parse_response(response).unwrap();
+        println!("json_str: {}", serde_json::to_string_pretty(&json_str).unwrap());
+        // assert_eq!(json_str, serde_json::json!({"name": "final_answer", "arguments": {"answer": "This is the final answer"}}));
+    }
+    
+}

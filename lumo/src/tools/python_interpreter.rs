@@ -2,7 +2,6 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use std::mem::ManuallyDrop;
 use std::sync::{Arc, RwLock};
 
 use super::base::BaseTool;
@@ -24,7 +23,7 @@ pub struct PythonInterpreterToolParams {
 #[derive(Debug, Clone)]
 pub struct PythonInterpreterTool {
     pub tool: BaseTool,
-    pub interpreter: Arc<RwLock<ManuallyDrop<LocalPythonInterpreter>>>,
+    pub interpreter: Arc<RwLock<LocalPythonInterpreter>>,
 }
 
 impl PythonInterpreterTool {
@@ -34,7 +33,7 @@ impl PythonInterpreterTool {
                 name: "python_interpreter",
                 description:  "This is a tool that evaluates python code. It can be used to perform calculations. Make sure to print the result using print()."
             },
-            interpreter: Arc::new(RwLock::new(ManuallyDrop::new(LocalPythonInterpreter::new(&[], None)))),
+            interpreter: Arc::new(RwLock::new(LocalPythonInterpreter::new(None, None))),
         }
     }
 }

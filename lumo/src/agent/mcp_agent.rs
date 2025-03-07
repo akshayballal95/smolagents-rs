@@ -13,7 +13,10 @@ use mcp_client::{Error, McpClient, McpClientTrait};
 use mcp_core::{protocol::JsonRpcMessage, Content, Tool};
 use tower::Service;
 
-use super::{Agent, AgentStep, AgentStream, MultiStepAgent, Step};
+use super::{Agent, AgentStep, MultiStepAgent, Step};
+
+#[cfg(feature = "stream")]
+use super::agent_trait::AgentStream;
 
 fn initialize_system_prompt(system_prompt: String, tools: Vec<Tool>) -> Result<String> {
     let tool_names = tools
@@ -276,6 +279,7 @@ where
     }
 }
 
+#[cfg(feature = "stream")]
 impl<M, S> AgentStream for  McpAgent<M, S>
 where
     M: Model + std::fmt::Debug + Send + Sync,

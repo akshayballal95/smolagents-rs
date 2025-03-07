@@ -12,7 +12,10 @@ use crate::{
 };
 
 
-use super::{agent_step::Step, agent_trait::Agent, multistep_agent::MultiStepAgent, AgentStep, AgentStream};
+use super::{agent_step::Step, agent_trait::Agent, multistep_agent::MultiStepAgent, AgentStep};
+
+#[cfg(feature = "stream")]
+use super::agent_trait::AgentStream;
 
 #[cfg(feature = "code-agent")]
 pub struct CodeAgent<M: Model> {
@@ -41,7 +44,7 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> CodeAgent<M> {
             max_steps,
         )?;
         
-        let local_python_interpreter = LocalPythonInterpreter::new(&base_agent.tools, None);
+        let local_python_interpreter = LocalPythonInterpreter::new(Some(&base_agent.tools), None);
 
         Ok(Self {
             base_agent,
@@ -165,6 +168,7 @@ impl<M: Model + std::fmt::Debug + Send + Sync + 'static> Agent for CodeAgent<M> 
     }
 }
 
+#[cfg(feature = "stream")]
 impl<M: Model + std::fmt::Debug + Send + Sync + 'static> AgentStream for  CodeAgent<M>{}
 
 #[cfg(feature = "code-agent")]

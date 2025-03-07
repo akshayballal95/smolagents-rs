@@ -1,4 +1,4 @@
-# 🤖 smolagents-rs
+# 🤖 lumo 
 
 This is a rust implementation of HF [smolagents](https://github.com/huggingface/smolagents) library. It provides a powerful autonomous agent framework written in Rust that solves complex tasks using tools and LLM models. 
 

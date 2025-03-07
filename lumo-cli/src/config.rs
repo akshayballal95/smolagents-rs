@@ -34,8 +34,6 @@ pub struct Servers {
 impl Servers {
     pub fn load() -> Result<Self> {
         let config_path = Self::config_path()?;
-
-        println!("Config path: {:?}", config_path);
         
         // If config file doesn't exist, create it with defaults
         if !config_path.exists() {

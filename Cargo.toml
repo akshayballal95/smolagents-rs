@@ -8,7 +8,7 @@ repository = "https://github.com/akshayballal95/smolagents-rs"
 
 [workspace]
 resolver = "2"
-members = ["lumo", "lumo-cli"]
+members = ["lumo", "lumo-cli", "lumo-examples"]
 
 [workspace.dependencies]
 htmd = "0.1.6"
@@ -31,6 +31,10 @@ clap = { version = "4.5.1", features = ["derive"] }
 textwrap = "0.16.0"
 bat = "0.25.0"
 nanoid = "0.4.0"
+async-stream = "0.3.6"
+rustyline = "15.0.0"
+serde_yaml = "0.9.33"
+directories = "6.0.0"
 
 # mcp
 mcp-client = {git = "https://github.com/modelcontextprotocol/rust-sdk"}

@@ -1,4 +1,3 @@
-use std::pin::Pin;
 
 use super::agent_step::Step;
 use crate::{
@@ -9,10 +8,12 @@ use crate::{
     },
 };
 use anyhow::Result;
-use async_stream;
 use async_trait::async_trait;
-use futures::Stream;
 use log::info;
+
+#[cfg(feature = "stream")]
+use {std::pin::Pin, futures::Stream};
+
 
 #[async_trait]
 pub trait Agent: Send + Sync {
@@ -33,7 +34,6 @@ pub trait Agent: Send + Sync {
     async fn direct_run(&mut self, task: &str) -> Result<String> {
         let mut final_answer: Option<String> = None;
         while final_answer.is_none() && self.get_step_number() < self.get_max_steps() {
-            println!("Step number: {:?}", self.get_step_number());
             let mut step_log = Step::ActionStep(AgentStep::new(self.get_step_number()));
 
             if let Some(step) = self.step(&mut step_log).await? {
@@ -194,6 +194,7 @@ pub trait Agent: Send + Sync {
     }
 }
 
+#[cfg(feature = "stream")]
 pub trait AgentStream: Agent {
     fn stream_run<'a>(
         &'a mut self,

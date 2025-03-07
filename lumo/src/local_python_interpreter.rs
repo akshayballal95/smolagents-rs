@@ -1,17 +1,17 @@
 use crate::errors::InterpreterError;
+use crate::tools::tool_traits::AsyncTool;
 use crate::tools::ToolInfo;
 use anyhow::Result;
-use pyo3::{prelude::*, IntoPyObjectExt};
 use pyo3::types::{IntoPyDict, PyDict, PyModule, PyTuple};
+use pyo3::{prelude::*, IntoPyObjectExt};
 use rustpython_parser::ast::{
     bigint::{BigInt, Sign},
     Constant,
 };
 use serde_json::{self, json, Value};
 use std::collections::HashMap;
-use crate::tools::tool_traits::AsyncTool;
-use tokio::runtime::Runtime;
 use std::ffi::CString;
+use tokio::runtime::Runtime;
 
 impl From<PyErr> for InterpreterError {
     fn from(err: PyErr) -> Self {
@@ -217,10 +217,10 @@ impl From<Constant> for CustomConstant {
 
 impl<'py> IntoPyObject<'py> for CustomConstant {
     type Target = PyAny;
-    type Output =Bound<'py, Self::Target>;
+    type Output = Bound<'py, Self::Target>;
     type Error = PyErr;
 
-    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error>{
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
         match self {
             CustomConstant::Int(i) => convert_bigint_to_i64(&i).into_bound_py_any(py),
             CustomConstant::Float(f) => f.into_bound_py_any(py),
@@ -255,7 +255,13 @@ pub struct PythonToolFunction {
 #[pymethods]
 impl PythonToolFunction {
     #[pyo3(signature = (*args, **kwargs))]
-    pub fn __call__(&self, _py: Python<'_>, args: &Bound<'_, PyTuple>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<CustomConstant> {        let mut arguments = HashMap::new();
+    pub fn __call__(
+        &self,
+        _py: Python<'_>,
+        args: &Bound<'_, PyTuple>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<CustomConstant> {
+        let mut arguments = HashMap::new();
 
         // Handle args based on whether it's a single argument or multiple arguments
         if let Ok(tuple) = args.downcast::<PyTuple>() {
@@ -304,7 +310,10 @@ impl PythonToolFunction {
     }
 }
 
-fn setup_custom_tools(tools: &[Box<dyn AsyncTool>], runtime: &Runtime) -> HashMap<String, PythonToolFunction> {
+fn setup_custom_tools(
+    tools: &[Box<dyn AsyncTool>],
+    runtime: &Runtime,
+) -> HashMap<String, PythonToolFunction> {
     let mut tools_map = HashMap::new();
     for tool in tools {
         let tool = tool.clone_box();
@@ -320,13 +329,11 @@ fn setup_custom_tools(tools: &[Box<dyn AsyncTool>], runtime: &Runtime) -> HashMa
                             args.get("answer").unwrap().as_str().unwrap().to_string(),
                         ));
                     }
-                    
+
                     let tool_clone = tool.clone_box();
                     // Execute the async operation synchronously
-                    let result = runtime.block_on(async {
-                        tool_clone.forward_json(args).await
-                    });
-                    
+                    let result = runtime.block_on(async { tool_clone.forward_json(args).await });
+
                     match result {
                         Ok(result) => Ok(CustomConstant::Str(result)),
                         Err(e) => Err(InterpreterError::RuntimeError(e.to_string())),
@@ -392,16 +399,22 @@ fn extract_constant_from_pyobject(
 
 fn evaluate_python_code(
     code: &str,
-    custom_tools: &[Box<dyn AsyncTool>],
+    custom_tools: Option<&[Box<dyn AsyncTool>]>,
     static_tools: &HashMap<&'static str, &'static str>,
     state: &mut HashMap<String, Py<PyAny>>,
-    runtime: &Runtime,
+    runtime: Option<&Runtime>,
 ) -> Result<String, InterpreterError> {
-    let custom_tools = setup_custom_tools(custom_tools, runtime);
+    let custom_tools = match custom_tools {
+        Some(tools) => Some(setup_custom_tools(tools, runtime.unwrap())),
+        None => None,
+    };
     let code = code.to_string();
     let static_tools = static_tools.clone();
     let state_clone: HashMap<String, Py<PyAny>> = Python::with_gil(|py| {
-        state.iter().map(|(k, v)| (k.clone(), v.clone_ref(py))).collect()
+        state
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone_ref(py)))
+            .collect()
     });
 
     // Move Python operations to a separate thread using std::thread
@@ -421,8 +434,10 @@ fn evaluate_python_code(
             }
 
             // Add custom tools to globals
-            for (name, tool) in custom_tools {
-                globals.set_item(name.to_string(), tool.into_bound_py_any(py)?)?;
+            if let Some(tools) = custom_tools {
+                for (name, tool) in tools {
+                    globals.set_item(name.to_string(), tool.into_bound_py_any(py)?)?;
+                }
             }
 
             // Add math module functions that are in base_tools
@@ -437,7 +452,7 @@ fn evaluate_python_code(
             // Redirect stdout
             let cmd = CString::new(format!("import sys; sys.stdout = stdout")).unwrap();
             py.run(&cmd, Some(&globals), None)?;
-            
+
             let code_str = CString::new(code).unwrap();
             // Run the user code with restricted globals
             py.run(&code_str, Some(&globals), Some(&locals))?;
@@ -473,26 +488,35 @@ fn evaluate_python_code(
             state.extend(new_state);
             Ok(output)
         }
-        Err(e) => Err(InterpreterError::RuntimeError(format!("Thread panicked: {:?}", e))),
+        Err(e) => Err(InterpreterError::RuntimeError(format!(
+            "Thread panicked: {:?}",
+            e
+        ))),
     }
 }
 
 #[derive(Debug)]
 pub struct LocalPythonInterpreter {
     static_tools: HashMap<&'static str, &'static str>,
-    custom_tools: Vec<Box<dyn AsyncTool>>,
+    custom_tools: Option<Vec<Box<dyn AsyncTool>>>,
     state: HashMap<String, PyObject>,
-    runtime: Runtime,
+    runtime: Option<Runtime>,
 }
 
 impl LocalPythonInterpreter {
     pub fn new(
-        custom_tools: &[Box<dyn AsyncTool>],
+        custom_tools: Option<&[Box<dyn AsyncTool>]>,
         static_tools: Option<HashMap<&'static str, &'static str>>,
     ) -> Self {
-        let custom_tools = custom_tools.iter().map(|tool| tool.clone_box()).collect();
         let static_tools = static_tools.unwrap_or_else(get_base_python_tools);
-        let runtime = Runtime::new().unwrap();
+        let (runtime, custom_tools) = if let Some(tools) = custom_tools {
+            (
+                Some(Runtime::new().unwrap()),
+                Some(tools.iter().map(|tool| tool.clone_box()).collect()),
+            )
+        } else {
+            (None, None)
+        };
 
         Self {
             static_tools,
@@ -505,10 +529,10 @@ impl LocalPythonInterpreter {
     pub fn forward(&mut self, code: &str) -> Result<(String, String), InterpreterError> {
         let execution_logs = evaluate_python_code(
             code,
-            &self.custom_tools,
+            self.custom_tools.as_deref(),
             &self.static_tools,
             &mut self.state,
-            &self.runtime,
+            self.runtime.as_ref(),
         )?;
 
         Ok(("".to_string(), execution_logs.to_string()))
@@ -523,7 +547,7 @@ mod tests {
     #[test]
     fn test_evaluate_python_code() {
         let code = "print('Hello, world!')";
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut interpreter = LocalPythonInterpreter::new(None, None);
         let (_, execution_logs) = interpreter.forward(&code).unwrap();
         assert_eq!(execution_logs, "Hello, world!\n");
     }
@@ -533,7 +557,7 @@ mod tests {
         let code = r#"word = 'strawberry'
 r_count = word.count('r')
 print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut interpreter = LocalPythonInterpreter::new(None, None);
         let (_, execution_logs) = interpreter.forward(&code).unwrap();
         assert_eq!(
             execution_logs,
@@ -544,7 +568,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
     #[test]
     fn test_final_answer_execution() {
         let tools: Vec<Box<dyn AsyncTool>> = vec![Box::new(FinalAnswerTool::new())];
-        let mut interpreter = LocalPythonInterpreter::new(&tools, None);
+        let mut interpreter = LocalPythonInterpreter::new(Some(&tools), None);
         let result = interpreter.forward("final_answer('Hello, world!')");
         assert_eq!(
             result,
@@ -559,7 +583,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         word = 'strawberry'
         print(word[3])"#,
         );
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut interpreter = LocalPythonInterpreter::new(None, None);
         let (_, execution_logs) = interpreter.forward(&code).unwrap();
         assert_eq!(execution_logs, "a\n");
 
@@ -568,7 +592,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         word = 'strawberry'
         print(word[-3])"#,
         );
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut interpreter = LocalPythonInterpreter::new(None, None);
         let (_, execution_logs) = interpreter.forward(&code).unwrap();
         assert_eq!(execution_logs, "r\n");
 
@@ -577,7 +601,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         word = 'strawberry'
         print(word[9])"#,
         );
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut interpreter = LocalPythonInterpreter::new(None, None);
         let (_, execution_logs) = interpreter.forward(&code).unwrap();
         assert_eq!(execution_logs, "y\n");
 
@@ -586,7 +610,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         word = 'strawberry'
         print(word[10])"#,
         );
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut interpreter = LocalPythonInterpreter::new(None, None);
         let result = interpreter.forward(&code);
         assert_eq!(
             result,
@@ -600,7 +624,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         numbers = [1, 2, 3, 4, 5]
         print(numbers[1])"#,
         );
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut interpreter = LocalPythonInterpreter::new(None, None);
         let (_, execution_logs) = interpreter.forward(&code).unwrap();
         assert_eq!(execution_logs, "2\n");
 
@@ -609,7 +633,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         numbers = [1, 2, 3, 4, 5]
         print(numbers[-5])"#,
         );
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut interpreter = LocalPythonInterpreter::new(None, None);
         let (_, execution_logs) = interpreter.forward(&code).unwrap();
         assert_eq!(execution_logs, "1\n");
 
@@ -618,7 +642,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         numbers = [1, 2, 3, 4, 5]
         print(numbers[-6])"#,
         );
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut interpreter = LocalPythonInterpreter::new(None, None);
         let result = interpreter.forward(&code);
         assert_eq!(
             result,
@@ -635,7 +659,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         numbers = [1, 2, 3, 4, 5]
         print(numbers[1:3])"#,
         );
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut interpreter = LocalPythonInterpreter::new(None, None);
         let (_, execution_logs) = interpreter.forward(&code).unwrap();
         assert_eq!(execution_logs, "[2, 3]\n");
 
@@ -644,7 +668,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         print(numbers[1:5:2])"#,
         );
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut interpreter = LocalPythonInterpreter::new(None, None);
         let (_, execution_logs) = interpreter.forward(&code).unwrap();
         assert_eq!(execution_logs, "[2, 4]\n");
 
@@ -653,7 +677,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         print(numbers[5:1:-2])"#,
         );
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut interpreter = LocalPythonInterpreter::new(None, None);
         let (_, execution_logs) = interpreter.forward(&code).unwrap();
         assert_eq!(execution_logs, "[6, 4]\n");
 
@@ -662,7 +686,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         word = 'strawberry'
         print(word[::-1])"#,
         );
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut interpreter = LocalPythonInterpreter::new(None, None);
         let (_, execution_logs) = interpreter.forward(&code).unwrap();
         assert_eq!(execution_logs, "yrrebwarts\n");
 
@@ -671,7 +695,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         numbers = [1, 2, 3, 4, 5]
         print(numbers[::-1])"#,
         );
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut interpreter = LocalPythonInterpreter::new(None, None);
         let (_, execution_logs) = interpreter.forward(&code).unwrap();
         assert_eq!(execution_logs, "[5, 4, 3, 2, 1]\n");
     }
@@ -684,7 +708,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
             print(i)
         "#,
         );
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut interpreter = LocalPythonInterpreter::new(None, None);
         let (_, execution_logs) = interpreter.forward(&code).unwrap();
         assert_eq!(execution_logs, "0\n1\n2\n3\n4\n");
     }
@@ -699,7 +723,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         "#,
         );
         let tools: Vec<Box<dyn AsyncTool>> = vec![Box::new(DuckDuckGoSearchTool::new())];
-        let mut interpreter = LocalPythonInterpreter::new(&tools, None);
+        let mut interpreter = LocalPythonInterpreter::new(Some(&tools), None);
         let (_, _) = interpreter.forward(&code).unwrap();
     }
 
@@ -711,7 +735,7 @@ print(f"The letter 'r' appears {r_count} times in the word '{word}'.")"#;
         print(f"my_dict['a'] is {my_dict['a']}")
         "#,
         );
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut interpreter = LocalPythonInterpreter::new(None, None);
         let (_, execution_logs) = interpreter.forward(&code).unwrap();
         assert_eq!(execution_logs, "my_dict['a'] is 1\n");
 
@@ -744,7 +768,7 @@ for place in dinner_places:
     print(f"{place['title']}: {place['url']}")
         "#,
         );
-        let mut local_python_interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut local_python_interpreter = LocalPythonInterpreter::new(None, None);
         let (_, execution_logs) = local_python_interpreter.forward(&code).unwrap();
         assert_eq!(execution_logs, "25 Best Restaurants in Berlin, By Local Foodies: https://www.timeout.com/berlin/restaurants/best-restaurants-in-berlin\nThe 38 Best Berlin Restaurants - Eater: https://www.eater.com/maps/best-restaurants-berlin\nTHE 10 BEST Restaurants in Berlin - Tripadvisor: https://www.tripadvisor.com/Restaurants-g187323-Berlin.html\n12 Unique Restaurants in Berlin: https://www.myglobalviewpoint.com/unique-restaurants-in-berlin/\nBerlin's best restaurants: 101 places to eat right now: https://www.the-berliner.com/food/best-restaurants-berlin-101-places-to-eat/\n");
 
@@ -762,7 +786,7 @@ for url in urls:
     "#,
         );
         let tools: Vec<Box<dyn AsyncTool>> = vec![Box::new(DuckDuckGoSearchTool::new())];
-        let mut interpreter = LocalPythonInterpreter::new(&tools, None);
+        let mut interpreter = LocalPythonInterpreter::new(Some(&tools), None);
         let (_, _) = interpreter.forward(&code).unwrap();
     }
 
@@ -774,7 +798,7 @@ for url in urls:
         print([x for x in a])
     "#,
         );
-        let mut interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut interpreter = LocalPythonInterpreter::new(None, None);
         let (_, execution_logs) = interpreter.forward(&code).unwrap();
         assert_eq!(execution_logs, "[1, 2, 3]\n");
     }
@@ -788,7 +812,7 @@ for url in urls:
             print(a)
         "#,
         );
-        let mut python_interpreter = LocalPythonInterpreter::new(&vec![], None);
+        let mut python_interpreter = LocalPythonInterpreter::new(None, None);
         let (_, execution_logs) = python_interpreter.forward(&code).unwrap();
         assert_eq!(execution_logs, "[1, 2, 3, 4]\n");
 
@@ -808,7 +832,7 @@ for url in urls:
         "#,
         );
         let tools: Vec<Box<dyn AsyncTool>> = vec![Box::new(VisitWebsiteTool::new())];
-        let mut interpreter = LocalPythonInterpreter::new(&tools, None);
+        let mut interpreter = LocalPythonInterpreter::new(Some(&tools), None);
         let (_, execution_logs) = interpreter.forward(&code).unwrap();
         assert_eq!(
             execution_logs,
@@ -837,7 +861,7 @@ for url in urls:
                 "#,
         );
         let tools: Vec<Box<dyn AsyncTool>> = vec![Box::new(VisitWebsiteTool::new())];
-        let mut local_python_interpreter = LocalPythonInterpreter::new(&tools, None);
+        let mut local_python_interpreter = LocalPythonInterpreter::new(Some(&tools), None);
         let (_, logs) = local_python_interpreter.forward(&code).unwrap();
         println!("logs: {:?}", logs);
         let (_, logs_2) = local_python_interpreter.forward(&code_2).unwrap();

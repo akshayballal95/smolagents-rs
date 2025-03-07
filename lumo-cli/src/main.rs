@@ -1,16 +1,18 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
-use colored::*;
 use futures::{Stream, StreamExt};
-use lumo::agent::{AgentStep, AgentStream, CodeAgent, FunctionCallingAgent};
 use lumo::agent::McpAgent;
+use lumo::agent::{AgentStep, AgentStream, CodeAgent, FunctionCallingAgent};
 use lumo::errors::AgentError;
 use lumo::models::model_traits::{Model, ModelResponse};
 use lumo::models::ollama::{OllamaModel, OllamaModelBuilder};
 use lumo::models::openai::OpenAIServerModel;
 use lumo::models::types::Message;
-use lumo::tools::{AsyncTool, DuckDuckGoSearchTool, GoogleSearchTool, PythonInterpreterTool, ToolInfo, VisitWebsiteTool};
+use lumo::tools::{
+    AsyncTool, DuckDuckGoSearchTool, GoogleSearchTool, PythonInterpreterTool, ToolInfo,
+    VisitWebsiteTool,
+};
 use mcp_client::{
     ClientCapabilities, ClientInfo, McpClient, McpClientTrait, McpService, StdioTransport,
     Transport,
@@ -18,12 +20,15 @@ use mcp_client::{
 use mcp_core::protocol::JsonRpcMessage;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, Write};
 use std::pin::Pin;
 use std::time::Duration;
 use tower::Service;
 mod config;
 use config::Servers;
+mod cli_utils;
+use cli_utils::CliPrinter;
+mod splash;
+use splash::SplashScreen;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum AgentType {
@@ -108,10 +113,6 @@ struct Args {
     #[arg(short = 'a', long, value_enum, default_value = "function-calling")]
     agent_type: AgentType,
 
-    /// Show the location of the configuration file
-    #[arg(long = "config-path")]
-    show_config_path: bool,
-
     /// List of tools to use
     #[arg(short = 'l', long = "tools", value_enum, num_args = 1.., value_delimiter = ',', default_values_t = [ToolType::DuckDuckGo, ToolType::VisitWebsite])]
     tools: Vec<ToolType>,
@@ -148,18 +149,15 @@ fn create_tool(tool_type: &ToolType) -> Box<dyn AsyncTool> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Args::parse();
-
-    // Show config path if requested
-    if args.show_config_path {
-        let config_path = Servers::config_path()?;
-        println!("Configuration file location: {}", config_path.display());
-        return Ok(());
-    }
-
-    // Load server configurations
+    // Display splash screen
+    let config_path = Servers::config_path()?;
     let servers = Servers::load()?;
-    println!("Available servers: {:?}", servers.servers.keys());
+    SplashScreen::display(
+        &config_path,
+        &servers.servers.keys().cloned().collect::<Vec<_>>(),
+    );
+
+    let args = Args::parse();
 
     let tools: Vec<Box<dyn AsyncTool>> = args.tools.iter().map(create_tool).collect();
 
@@ -175,6 +173,7 @@ async fn main() -> Result<()> {
             OllamaModelBuilder::new()
                 .model_id(&args.model_id)
                 .ctx_length(8000)
+                .temperature(Some(0.1))
                 .url(
                     args.base_url
                         .unwrap_or("http://localhost:11434".to_string()),
@@ -186,7 +185,9 @@ async fn main() -> Result<()> {
 
     // Ollama doesn't work well with the default system prompt. Its better to use a simple custom one or none at all.
     let system_prompt = match args.model_type {
-        ModelType::Ollama => Some("You are a helpful assistant that can answer questions and help with tasks. Keep calling tools until you have completed the task. Answer in markdown format.car"),
+        ModelType::Ollama => {
+            Some("You are a helpful assistant that can answer questions and help with tasks. Take multiple steps if needed until you have completed the task.")
+        }
         ModelType::OpenAI => None,
     };
     let mut agent = match args.agent_type {
@@ -209,7 +210,7 @@ async fn main() -> Result<()> {
         AgentType::Mcp => {
             // Initialize all configured servers
             let mut clients = Vec::new();
-
+            let servers = Servers::load()?;
             // Iterate through all server configurations
             for (server_name, server_config) in servers.servers.iter() {
                 // Create transport for this server
@@ -248,109 +249,22 @@ async fn main() -> Result<()> {
     let mut file: File = File::create("logs.txt")?;
 
     loop {
-        print!("{}", "🤖 User: ".bright_green().bold());
-        io::stdout().flush()?;
+        let mut cli_printer = CliPrinter::new()?;
+        let task = cli_printer.prompt_user()?;
 
-        let mut task = String::new();
-        io::stdin().read_line(&mut task)?;
-        let task = task.trim();
-
-        // Exit if user enters empty line or Ctrl+D
         if task.is_empty() {
-            println!("{}", "⚠️  Please enter a task to execute".yellow().italic());
+            CliPrinter::handle_empty_input();
             continue;
         }
         if task == "exit" {
-            println!("{}", "👋 Goodbye!".bright_blue().bold());
+            CliPrinter::print_goodbye();
             break;
         }
 
-        // Run the agent with the task from stdin
-        let mut _result = agent.stream_run(task, false).unwrap();
-        while let Some(step) = _result.next().await {
-            // Log each step as it happens instead of at the end
+        let mut result = agent.stream_run(&task, false)?;
+        while let Some(step) = result.next().await {
             serde_json::to_writer_pretty(&mut file, &step)?;
-            
-            println!("{} {}", "📍 Step:".bright_cyan().bold(), step.step);
-            if let Some(tool_call) = step.tool_call {
-                if tool_call[0].function.name != "python_interpreter" {
-                println!(
-                    "{} {}",
-                    "🔧 Executing:".bright_magenta().bold(),
-                    tool_call
-                        .iter()
-                        .map(|tool_call| {
-                            let args = tool_call.function.arguments.as_object().unwrap();
-                            let formatted_args = args
-                                .iter()
-                                .map(|(k, v)| format!(
-                                    "{}{}{}",
-                                    k.bright_cyan(),
-                                    ": ".bright_white(),
-                                    v.to_string().trim_matches('"').bright_yellow()
-                                ))
-                                .collect::<Vec<String>>()
-                                .join(", ");
-                            
-                            format!(
-                                "{} {{ {} }}",
-                                tool_call.function.name.bright_white().bold(),
-                                formatted_args
-                            )
-                        })
-                        .collect::<Vec<String>>()
-                        .join(" | "),
-                );
-            }
-                else {
-                    println!("{} {}", "🔧 Executing:".bright_magenta().bold(), tool_call[0].function.name.bright_white().bold());
-
-                    let code_string = tool_call[0].function.arguments["code"].as_str().unwrap();
-                    // Calculate max width from code lines
-                    let max_width = code_string.lines()
-                        .map(|line| line.chars().count())
-                        .max()
-                        .unwrap_or(0)
-                        .max(20);  // minimum width of 20
-                    let width = max_width + 4;  // add padding
-                    
-                    // Create dynamic border strings
-                    let horizontal = "─".repeat(width);
-                    let empty_line = format!("{}", " ".repeat(width));
-                    let title = " 📝 Python Code ";
-                    let title_padding = (width - title.chars().count()) / 2;
-                    let top_border = format!("┌{}{}{}┐", 
-                        "─".repeat(title_padding), 
-                        title,
-                        "─".repeat(width - title_padding - title.chars().count())
-                    );
-                    
-                    println!("\n{}", top_border.bright_yellow());
-                    println!("{}", empty_line);
-                    bat::PrettyPrinter::new()
-                        .input(bat::Input::from_bytes(code_string.as_bytes()))
-                        .language("Python")
-                        .wrapping_mode(bat::WrappingMode::Character)
-                        .print()
-                        .unwrap();
-                    println!("{}", empty_line);
-                    println!("{}", format!("└{}┘", horizontal).bright_yellow());
-                }
-            }
-            if let Some(error) = step.error {
-                println!("{} {}", "❌ Error:".bright_red().bold(), error);
-            }
-            if let Some(answer) = step.final_answer {
-                println!("\n{}", "✨ Final Answer:".bright_blue().bold());
-
-                bat::PrettyPrinter::new()
-                    .input(bat::Input::from_bytes(answer.as_bytes()))
-                    .language("Markdown")
-                    .wrapping_mode(bat::WrappingMode::NoWrapping(true))
-                    .print()
-                    .unwrap();
-                println!("\n");
-            }
+            CliPrinter::print_step(&step)?;
         }
     }
 
