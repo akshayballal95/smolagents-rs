@@ -16,7 +16,7 @@ use crate::models::openai::FunctionCall;
 pub trait Parameters: DeserializeOwned + JsonSchema {}
 
 /// A trait for tools that can be used in an agent.
-pub trait Tool: Debug {
+pub trait Tool: Debug + Send + Sync {
     type Params: Parameters;
     /// The name of the tool.
     fn name(&self) -> &'static str;
@@ -49,7 +49,7 @@ pub struct ToolFunctionInfo {
 
 impl ToolInfo {
     pub fn new<P: Parameters, T: AnyTool>(tool: &T) -> Self {
-        let mut settings = SchemaSettings::draft07();
+        let mut settings = SchemaSettings::openapi3();
         settings.inline_subschemas = true;
         let generator = settings.into_generator();
 
@@ -96,7 +96,7 @@ impl ToolGroup for Vec<Box<dyn AnyTool>> {
     }
 }
 
-pub trait AnyTool: Debug {
+pub trait AnyTool: Debug + Send + Sync {
     fn name(&self) -> &'static str;
     fn description(&self) -> &'static str;
     fn forward_json(&self, json_args: serde_json::Value) -> Result<String, AgentError>;
@@ -118,9 +118,9 @@ impl<T: Tool + Clone + 'static> AnyTool for T {
             AgentError::Parsing(format!(
                 "Error when executing tool with arguments: {:?}: {}. As a reminder, this tool's description is: {} and takes inputs: {}",
                 json_args,
-                e.to_string(),
+                e,
                 self.description(),
-                json!(&self.tool_info().function.parameters.schema)["properties"].to_string()
+                json!(&self.tool_info().function.parameters.schema)["properties"]
             ))
         })?;
         Tool::forward(self, params).map_err(|e| AgentError::Execution(e.to_string()))

@@ -51,14 +51,14 @@ impl VisitWebsiteTool {
                     "The website appears to be blocking automated access. Try visiting the URL directly in your browser.".to_string()
                 } else {
                     format!(
-                        "Failed to fetch the webpage {}: HTTP {} - {}",
+                        "Failed to fetch the webpage {}: HTTP {} - {}. Try another website URL.",
                         url,
                         resp.status(),
                         resp.status().canonical_reason().unwrap_or("Unknown Error")
                     )
                 }
             }
-            Err(e) => format!("Failed to make the request to {}: {}", url, e),
+            Err(e) => format!("Failed to make the request to {}: {}. Try another website URL.", url, e),
         }
     }
 }

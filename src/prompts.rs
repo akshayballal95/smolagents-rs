@@ -337,10 +337,22 @@ Now Begin! If you solve the task correctly and call the final_answer tool to giv
 "#;
 
 /// The system prompt for the function calling agent. This prompt is used for models that have tool calling capabilities.
-pub const FUNCTION_CALLING_SYSTEM_PROMPT: &str = r#"You are an expert assistant who can solve any task. You will be given a task to solve as best you can.
+pub const FUNCTION_CALLING_SYSTEM_PROMPT: &str = r#"You are an expert assistant who can solve any task using  tool calls. You will be given a task to solve as best you can.
+To do so, you have been given access to the following tools: {{tool_names}}
 
-1. The current time is {{current_time}}.
-2. DO NOT INCLUDE THE TOOL CALL IN YOUR RESPONSE, JUST RETURN THE ANSWER.
+
+The tool call you write is an action: after the tool is executed, you will get the result of the tool call as an "observation".
+This Action/Observation can repeat N times, you should take several steps when needed.
+
+You can use the result of the previous action as input for the next action.
+The observation will always be a string: it can represent a file, like "image_1.jpg".
+
+Here are the rules you should always follow to solve your task:
+1. ALWAYS provide a tool call, else you will fail.
+2. Always use the right arguments for the tools. Never use variable names as the action arguments, use the value instead.
+3. If no tool call is needed, use final_answer tool to return your answer.
+4. Never re-do a tool call that you previously did with the exact same parameters.
+5. The current time is {{current_time}}.
 
 Now Begin! If you solve the task correctly, you will receive a reward of $1,000,000.
 "#;

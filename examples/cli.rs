@@ -3,15 +3,16 @@ use std::collections::HashMap;
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use serde_json;
-use smolagents_rs::agents::Step;
-use smolagents_rs::agents::{Agent, CodeAgent, FunctionCallingAgent};
+use smolagents_rs::agent::Step;
+use smolagents_rs::agent::{Agent, CodeAgent, FunctionCallingAgent};
 use smolagents_rs::errors::AgentError;
 use smolagents_rs::models::model_traits::{Model, ModelResponse};
 use smolagents_rs::models::ollama::{OllamaModel, OllamaModelBuilder};
 use smolagents_rs::models::openai::OpenAIServerModel;
 use smolagents_rs::models::types::Message;
 use smolagents_rs::tools::{
-    AnyTool, DuckDuckGoSearchTool, GoogleSearchTool, ToolInfo, VisitWebsiteTool,
+    AnyTool, DuckDuckGoSearchTool, GoogleSearchTool, PythonInterpreterTool, ToolInfo,
+    VisitWebsiteTool,
 };
 use std::fs::File;
 
@@ -26,6 +27,7 @@ enum ToolType {
     DuckDuckGo,
     VisitWebsite,
     GoogleSearchTool,
+    PythonInterpreter,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -112,6 +114,10 @@ struct Args {
     /// Base URL for the API
     #[arg(short, long)]
     base_url: Option<String>,
+
+    /// Maximum number of steps to take
+    #[arg(long, default_value = "10")]
+    max_steps: Option<usize>,
 }
 
 fn create_tool(tool_type: &ToolType) -> Box<dyn AnyTool> {
@@ -119,6 +125,7 @@ fn create_tool(tool_type: &ToolType) -> Box<dyn AnyTool> {
         ToolType::DuckDuckGo => Box::new(DuckDuckGoSearchTool::new()),
         ToolType::VisitWebsite => Box::new(VisitWebsiteTool::new()),
         ToolType::GoogleSearchTool => Box::new(GoogleSearchTool::new(None)),
+        ToolType::PythonInterpreter => Box::new(PythonInterpreterTool::new()),
     }
 }
 
@@ -139,6 +146,8 @@ fn main() -> Result<()> {
             OllamaModelBuilder::new()
                 .model_id(&args.model_id)
                 .ctx_length(8000)
+                .temperature(Some(0.0))
+                .with_native_tools(true)
                 .build(),
         ),
     };
@@ -151,7 +160,7 @@ fn main() -> Result<()> {
             None,
             None,
             Some("CLI Agent"),
-            None,
+            args.max_steps,
         )?),
         AgentType::Code => AgentWrapper::Code(CodeAgent::new(
             model,

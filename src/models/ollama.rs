@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use serde::Deserialize;
 use serde_json::json;
 
 use crate::{errors::AgentError, tools::ToolInfo};
@@ -8,31 +7,9 @@ use anyhow::Result;
 
 use super::{
     model_traits::{Model, ModelResponse},
-    openai::ToolCall,
-    types::{Message, MessageRole},
+    openai::OpenAIResponse,
+    types::Message,
 };
-
-#[derive(Debug, Deserialize)]
-pub struct OllamaResponse {
-    pub message: AssistantMessage,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AssistantMessage {
-    pub role: MessageRole,
-    pub content: Option<String>,
-    pub tool_calls: Option<Vec<ToolCall>>,
-}
-
-impl ModelResponse for OllamaResponse {
-    fn get_response(&self) -> Result<String, AgentError> {
-        Ok(self.message.content.clone().unwrap_or_default())
-    }
-
-    fn get_tools_used(&self) -> Result<Vec<ToolCall>, AgentError> {
-        Ok(self.message.tool_calls.clone().unwrap_or_default())
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct OllamaModel {
@@ -41,6 +18,8 @@ pub struct OllamaModel {
     url: String,
     client: reqwest::blocking::Client,
     ctx_length: usize,
+    max_tokens: usize,
+    native_tools: bool,
 }
 
 #[derive(Default)]
@@ -50,6 +29,8 @@ pub struct OllamaModelBuilder {
     client: Option<reqwest::blocking::Client>,
     url: Option<String>,
     ctx_length: Option<usize>,
+    max_tokens: Option<usize>,
+    native_tools: Option<bool>,
 }
 
 impl OllamaModelBuilder {
@@ -61,6 +42,8 @@ impl OllamaModelBuilder {
             client: Some(client),
             url: Some("http://localhost:11434".to_string()),
             ctx_length: Some(2048),
+            max_tokens: Some(1500),
+            native_tools: Some(false),
         }
     }
 
@@ -84,6 +67,21 @@ impl OllamaModelBuilder {
         self
     }
 
+    pub fn max_tokens(mut self, max_tokens: usize) -> Self {
+        self.max_tokens = Some(max_tokens);
+        self
+    }
+
+    /// Whether to use native tools. If using native tools, make sure to either give simple system prompts
+    /// without any mention of tools or it could result in unexpected behavior with some models like qwen2.5.
+    /// The default system prompt is Tool Calling System Prompt, which provides a way to call tools. Some models
+    /// like qwen2.5 do not behave well with this when native tools are used. By default, native tools are not used.
+    /// In this case, the tool call is parsed from the response and the tool call is made to the model.
+    pub fn with_native_tools(mut self, native_tools: bool) -> Self {
+        self.native_tools = Some(native_tools);
+        self
+    }
+
     pub fn build(self) -> OllamaModel {
         OllamaModel {
             model_id: self.model_id,
@@ -91,6 +89,8 @@ impl OllamaModelBuilder {
             url: self.url.unwrap_or("http://localhost:11434".to_string()),
             client: self.client.unwrap_or_default(),
             ctx_length: self.ctx_length.unwrap_or(2048),
+            max_tokens: self.max_tokens.unwrap_or(1500),
+            native_tools: self.native_tools.unwrap_or(false),
         }
     }
 }
@@ -103,16 +103,6 @@ impl Model for OllamaModel {
         max_tokens: Option<usize>,
         args: Option<HashMap<String, Vec<String>>>,
     ) -> Result<Box<dyn ModelResponse>, AgentError> {
-        let messages = messages
-            .iter()
-            .map(|message| {
-                json!({
-                    "role": message.role,
-                    "content": message.content
-                })
-            })
-            .collect::<Vec<_>>();
-
         let tools = json!(tools_to_call_from);
 
         let mut body = json!({
@@ -123,24 +113,37 @@ impl Model for OllamaModel {
             "options": json!({
                 "num_ctx": self.ctx_length,
             }),
-            "tools": tools,
-            "max_tokens": max_tokens.unwrap_or(1500),
+            "max_tokens": max_tokens.unwrap_or(self.max_tokens),
         });
         if let Some(args) = args {
             for (key, value) in args {
                 body["options"][key] = json!(value);
             }
         }
+        if self.native_tools {
+            body["tools"] = tools;
+        }
 
         let response = self
             .client
-            .post(format!("{}/api/chat", self.url))
+            .post(format!("{}/v1/chat/completions", self.url))
+            .header("Content-Type", "application/json")
             .json(&body)
             .send()
             .map_err(|e| {
                 AgentError::Generation(format!("Failed to get response from Ollama: {}", e))
             })?;
-        let output = response.json::<OllamaResponse>().unwrap();
+        let status = response.status();
+        if status.is_client_error() {
+            let error_message = response.text().unwrap_or_default();
+            return Err(AgentError::Generation(format!(
+                "Failed to get response from Ollama: {}",
+                error_message
+            )));
+        }
+        let output = response.json::<OpenAIResponse>().map_err(|e| {
+            AgentError::Generation(format!("Failed to parse response from Ollama: {}", e))
+        })?;
         Ok(Box::new(output))
     }
 }
